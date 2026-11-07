@@ -19,7 +19,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.nshare.receiver"
+        applicationId = "namu0329.nshare.receiver"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
