@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notification_channel">화면 공유 수신</string>
+    <string name="notification_text">화면 공유를 받을 준비가 되었습니다</string>
+
+    <string name="idle_status">화면 공유 대기 중</string>
+    <string name="idle_body">휴대폰이나 컴퓨터에서 이 TV를 선택하면 화면이 바로 나타납니다.</string>
+    <string name="apple_step1">제어 센터 열기</string>
+    <string name="apple_step2">화면 미러링</string>
+    <string name="android_step1">NShare 앱 열기</string>
+    <string name="android_step2">주변 TV</string>
+    <string name="no_network">네트워크 연결 없음</string>
+    <string name="button_diagnostics">진단 정보</string>
+    <string name="language_system">시스템 기본값</string>
+    <string name="waiting_connected">%1$s 연결됨</string>
+    <string name="waiting_video">화면을 기다리는 중…</string>
+
+    <string name="mode_low">저지연</string>
+    <string name="mode_balanced">균형</string>
+    <string name="mode_smooth">부드러움</string>
+    <string name="hint_av_offset">소리 싱크 %1$s  ·  ◀ 소리 빠르게   ▶ 소리 늦게</string>
+    <string name="hint_mode">재생 모드: %1$s</string>
+    <string name="hint_back_disconnect">한 번 더 누르면 화면 공유를 종료합니다</string>
+
+    <string name="stats_idle">NShare 진단\n대기 중: %1$s\n주소: %2$s  (AirPlay %3$d · NShare 7100)</string>
+    <string name="stats_title">NShare 진단   OK 닫기 · ◀▶ 소리 싱크 · ▲▼ 재생 모드</string>
+    <string name="stats_sender">송신  %1$s (%2$s)</string>
+    <string name="stats_video">영상  %1$dx%2$d  %3$s</string>
+    <string name="stats_rates">      입력 %1$.1f fps · 표시 %2$.1f fps · %3$.1f Mbps</string>
+    <string name="stats_latency">지연  목표 %1$d ms (%2$s) · 네트워크 p95 %3$.0f ms · 디코드 p95 %4$.0f ms</string>
+    <string name="stats_frames">      늦은 프레임 %1$d · 건너뜀 %2$d · 디코더 리셋 %3$d</string>
+    <string name="stats_audio">소리  싱크 오차 %1$+.1f ms · 출력 지연 %2$.0f ms</string>
+    <string name="stats_audio2">      버림 %1$d · 무음 %2$d ms · 언더런 %3$d</string>
+    <string name="stats_offset">보정  %1$s · 시계 %2$s</string>
+    <string name="clock_arrival">도착시간 추정</string>
+</resources>

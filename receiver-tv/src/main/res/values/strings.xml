@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NShare</string>
+    <string name="notification_channel">Screen share receiver</string>
+    <string name="notification_text">Ready to receive screen sharing</string>
+
+    <string name="idle_status">Waiting for screen share</string>
+    <string name="idle_body">Choose this TV on your phone or computer and your screen appears instantly.</string>
+    <string name="apple_title">iPhone · iPad · Mac</string>
+    <string name="apple_step1">Open Control Center</string>
+    <string name="apple_step2">Screen Mirroring</string>
+    <string name="android_step1">Open the NShare app</string>
+    <string name="android_step2">Nearby TVs</string>
+    <string name="no_network">No network connection</string>
+    <string name="button_diagnostics">Diagnostics</string>
+    <string name="language_system">System default</string>
+    <string name="language_korean">한국어</string>
+    <string name="language_english">English</string>
+    <string name="waiting_connected">%1$s connected</string>
+    <string name="waiting_video">Waiting for the screen…</string>
+
+    <string name="mode_low">Low latency</string>
+    <string name="mode_balanced">Balanced</string>
+    <string name="mode_smooth">Smooth</string>
+    <string name="hint_av_offset">Audio sync %1$s  ·  ◀ earlier   ▶ later</string>
+    <string name="hint_mode">Playback mode: %1$s</string>
+    <string name="hint_back_disconnect">Press again to stop screen sharing</string>
+
+    <string name="stats_idle">NShare diagnostics\nWaiting: %1$s\nAddress: %2$s  (AirPlay %3$d · NShare 7100)</string>
+    <string name="stats_title">NShare diagnostics   OK close · ◀▶ audio sync · ▲▼ playback mode</string>
+    <string name="stats_sender">Sender  %1$s (%2$s)</string>
+    <string name="stats_video">Video   %1$dx%2$d  %3$s</string>
+    <string name="stats_rates">        in %1$.1f fps · shown %2$.1f fps · %3$.1f Mbps</string>
+    <string name="stats_latency">Delay   target %1$d ms (%2$s) · network p95 %3$.0f ms · decode p95 %4$.0f ms</string>
+    <string name="stats_frames">        late frames %1$d · skipped %2$d · decoder resets %3$d</string>
+    <string name="stats_audio">Audio   sync error %1$+.1f ms · output latency %2$.0f ms</string>
+    <string name="stats_audio2">        dropped %1$d · silence %2$d ms · underruns %3$d</string>
+    <string name="stats_offset">Offset  %1$s · clock %2$s</string>
+    <string name="clock_arrival">arrival estimate</string>
+</resources>
