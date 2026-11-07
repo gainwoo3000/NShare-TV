@@ -328,7 +328,8 @@ private fun StatsPanel(text: String, belowTopBar: Boolean) {
             .fillMaxSize()
             .padding(horizontal = SafeHorizontal, vertical = SafeVertical)
             .padding(top = if (belowTopBar) 64.dp else 0.dp),
-        contentAlignment = Alignment.TopStart,
+        // On the idle screen the left column holds the title, so the panel sits under the buttons.
+        contentAlignment = if (belowTopBar) Alignment.TopEnd else Alignment.TopStart,
     ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
