@@ -7,9 +7,11 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 
 /**
- * NShare streaming protocol, version 1.
+ * NShare streaming protocol, version 2.
  *
- * One TCP connection per session (sender → receiver port [Nsp.DEFAULT_PORT]), carrying frames:
+ * One TLS 1.3 connection per session (sender → receiver port [Nsp.DEFAULT_PORT]), mutually
+ * authenticated with self-signed device certificates that are pinned by fingerprint (see [NspTls],
+ * [ServerHandshake], [ClientHandshake]). Inside TLS the stream carries frames:
  *
  *   magic   u16  0x4E53 ("NS")
  *   type    u8   [Nsp.Type]
@@ -18,12 +20,16 @@ import java.nio.charset.StandardCharsets
  *   timeNs  i64  sender System.nanoTime() of capture (0 if not applicable)
  *   payload
  *
- * Handshake: sender HELLO → receiver CAPS → sender VIDEO_CONFIG / AUDIO_CONFIG → media.
+ * Handshake: sender HELLO → [PAIR_REQUIRED / PAIR_PROOF / PAIR_RESULT] → [WAIT_APPROVAL] → receiver CAPS
+ * (or ERROR) → sender VIDEO_CONFIG / AUDIO_CONFIG → media. After CAPS both sides send PING every
+ * [PING_INTERVAL_MS] and drop the session after [IDLE_TIMEOUT_MS] without any frame.
  * Clock sync uses the AirPlay-style NTP exchange over UDP: the receiver sends timing requests
  * to the sender's timing port (announced in HELLO) and the sender answers with its clock.
+ *
+ * Version 1 (plain TCP, no PING) is not compatible; peers refuse it with an "update the app" error.
  */
 object Nsp {
-    const val VERSION = 1
+    const val VERSION = 2
     const val SERVICE_TYPE = "_nshare._tcp"
     const val DEFAULT_PORT = 7100
     const val MAGIC = 0x4E53
@@ -31,6 +37,15 @@ object Nsp {
     const val MAX_PAYLOAD = 32 * 1024 * 1024
     /** Payload limit before the handshake completes (HELLO/CAPS are a few hundred bytes). */
     const val MAX_HANDSHAKE_PAYLOAD = 16 * 1024
+
+    const val PING_INTERVAL_MS = 1_000L
+    const val IDLE_TIMEOUT_MS = 5_000
+    /** TLS + HELLO must complete within this time. */
+    const val HANDSHAKE_TIMEOUT_MS = 10_000L
+    /** Time the user has to type the PIN shown on the TV. */
+    const val PAIRING_TIMEOUT_MS = 120_000
+    /** Time the TV user has to accept a second sender. */
+    const val APPROVAL_TIMEOUT_MS = 10_000L
 
     object Type {
         const val HELLO = 1
@@ -42,6 +57,19 @@ object Nsp {
         const val KEYFRAME_REQUEST = 7
         const val BYE = 8
         const val PING = 9
+        const val ERROR = 10
+        const val PAIR_REQUIRED = 11
+        const val PAIR_PROOF = 12
+        const val PAIR_RESULT = 13
+        const val WAIT_APPROVAL = 14
+    }
+
+    /** Codes carried by ERROR frames. */
+    object Error {
+        const val VERSION = "version"
+        const val REJECTED = "rejected"
+        const val PAIRING = "pairing"
+        const val PROTOCOL = "protocol"
     }
 
     const val FLAG_KEY_FRAME = 1
