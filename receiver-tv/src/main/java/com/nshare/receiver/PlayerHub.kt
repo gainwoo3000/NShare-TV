@@ -105,7 +105,8 @@ object PlayerHub {
         val elapsedMs: Long = 0,
         val durationMs: Long = 0,
         val atMs: Long = 0,
-        val paused: Boolean = false,
+        /** Starts paused: the clock only runs once the sound actually flows. */
+        val paused: Boolean = true,
     ) {
         fun positionMs(nowMs: Long): Long =
             (if (paused) elapsedMs else elapsedMs + (nowMs - atMs)).coerceIn(0, durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
@@ -162,7 +163,7 @@ object PlayerHub {
         nowPlaying = NowPlaying(
             title = "Supernova", artist = "aespa", album = "Armageddon - The 1st Album",
             artwork = bmp.asImageBitmap(), elapsedMs = 74_000, durationMs = 178_000,
-            atMs = android.os.SystemClock.elapsedRealtime(),
+            atMs = android.os.SystemClock.elapsedRealtime(), paused = false,
         )
     }
 
@@ -406,9 +407,14 @@ object PlayerHub {
         override fun onTrackInfo(player: MirrorPlayer, info: com.nshare.airplay.TrackInfo) =
             updateNowPlaying(player) {
                 val newTrack = it.title != info.title || it.artist != info.artist
-                // A new track starts at 0 until the sender reports its progress.
+                // A new track starts at 0 and only counts once its sound is heard (a track that
+                // follows seamlessly keeps the audio flowing and keeps counting).
                 if (newTrack) {
-                    it.copy(title = info.title, artist = info.artist, album = info.album, elapsedMs = 0, atMs = android.os.SystemClock.elapsedRealtime())
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    it.copy(
+                        title = info.title, artist = info.artist, album = info.album,
+                        elapsedMs = 0, atMs = now, paused = !player.audioFlowing(now),
+                    )
                 } else {
                     it.copy(title = info.title, artist = info.artist, album = info.album)
                 }
