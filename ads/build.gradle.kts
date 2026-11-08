@@ -36,6 +36,10 @@ dependencies {
     // Google AdMob as a LevelPlay mediation network. AdMob ad unit IDs are configured in the LevelPlay
     // dashboard; each app declares its AdMob app ID in its manifest (com.google.android.gms.ads.APPLICATION_ID).
     implementation("com.unity3d.ads-mediation:admob-adapter:5.19.0")
+    // Unity Ads network (the LevelPlay dashboard has a Unity Ads banner instance; without the
+    // adapter that instance cannot be created and banners end in "No fill").
+    implementation("com.unity3d.ads-mediation:unityads-adapter:5.16.0")
+    implementation("com.unity3d.ads:unity-ads:4.21.0")
     implementation("com.google.android.gms:play-services-appset:16.1.0")
     implementation("com.google.android.gms:play-services-ads-identifier:18.3.0")
     implementation(platform("androidx.compose:compose-bom:2026.06.01"))
