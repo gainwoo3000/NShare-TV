@@ -25,11 +25,12 @@ Google TV / Android TV에 설치하는 화면 공유 수신 앱입니다.
 ```
 receiver-tv/    Android TV 앱 (Jetpack Compose for TV)
   player/       Timeline(공통 재생 시간축), VideoRenderer(MediaCodec), AudioRenderer(AudioTrack)
-  nsp/          NShare 프로토콜 수신 서버
-  ui/           대기 화면, 영상 화면, 진단 오버레이
+  nsp/          NShare 프로토콜 수신 서버 (TLS, 페어링, 승인, 재연결 유예)
+  security/     보안 설정, 신뢰하는 기기 목록
+  ui/           대기 화면, 영상 화면, 설정 화면, PIN·승인·재연결 오버레이, 진단 오버레이
 airplay/        AirPlay 호환 수신 라이브러리 (Kotlin)
   server/       RTSP 서버, mDNS 광고, 세션 처리
-  crypto/       Ed25519/X25519 페어링, FairPlay JNI 래퍼
+  crypto/       Ed25519/X25519 페어링, PIN 페어링(SRP-6a), 암호 인증(Digest), FairPlay JNI 래퍼
   stream/       미러링 영상(TCP, AES-CTR) / 오디오(UDP RTP, AES-CBC) 수신
   time/         NTP 시계 동기화
   src/main/cpp/ FairPlay (playfair, GPLv3)
@@ -69,7 +70,8 @@ ads/            Unity LevelPlay 배너 (+ AdMob 미디에이션)
    ```
 
 ## 리모컨 조작
-- **대기 화면**: 위쪽의 [진단 정보] 버튼과 [언어] 버튼을 리모컨으로 선택합니다.
+- **대기 화면**: 위쪽의 [설정], [진단 정보], [언어] 버튼을 리모컨으로 선택합니다. 설정 화면은 **뒤로**로 닫습니다.
+- **승인 창**: 기본 선택은 [거부]입니다. 10초 안에 고르지 않으면 거부됩니다.
 - **미러링 중**:
   - **OK**: 진단 정보를 켜고 끕니다.
   - 진단 정보가 켜진 상태에서 **◀ ▶**는 소리 싱크 ±10ms, **▲ ▼**는 재생 모드(저지연 / 균형 / 부드러움)를 바꿉니다.
@@ -78,19 +80,49 @@ ads/            Unity LevelPlay 배너 (+ AdMob 미디에이션)
 ## 로그
 
 ```sh
-adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Video NShare.Stats NShare.Nsp NShare.Ads
+adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Video NShare.Stats NShare.Nsp NShare.Hub NShare.Wifi NShare.Ads
 ```
 
-## NShare 프로토콜 (v1)
-- **발견**: mDNS `_nshare._tcp`, TCP 포트 7100
-- **프레임 형식**: `magic(2) type(1) flags(1) length(4) timeNs(8) payload`
-- **흐름**: HELLO → CAPS(수신기 해상도·코덱) → VIDEO_CONFIG / AUDIO_CONFIG → 미디어 프레임
+## 보안 (TV 설정 화면)
+- **NShare 연결은 항상 암호화됩니다** (TLS 1.3). 설정으로 끌 수 없습니다.
+- **NShare PIN 페어링**: 켜면 처음 연결하는 휴대폰에 TV 화면의 6자리 PIN을 입력하게 합니다. 끄면 처음 연결한 기기를 그대로 믿습니다(TOFU).
+- **기기 전환 승인**: 켜면 누군가 공유 중일 때 다른 기기가 연결하려 하면 TV에서 허용/거부를 묻습니다. AirPlay에도 적용됩니다.
+- **AirPlay 보안**:
+  - 없음
+  - 화면 PIN: Apple 기기에 TV 화면의 4자리 코드를 입력하게 합니다. 한 번 페어링한 기기는 다음부터 바로 연결됩니다.
+  - 암호: 정해 둔 암호를 입력해야 연결됩니다. 암호를 아직 저장하지 않았으면 열린 상태로 동작합니다.
+- **신뢰하는 기기**: PIN이나 TOFU로 등록된 휴대폰과 Apple 기기 목록입니다. 하나씩 또는 전체를 삭제할 수 있습니다.
+- 설정은 다음 연결부터 적용됩니다.
+
+## NShare 프로토콜 (v2)
+- **발견**: mDNS `_nshare._tcp`, TCP 포트 7100. TXT 레코드에 `v=2`(프로토콜 버전)와 `fp`(인증서 지문 앞 8바이트)가 있습니다.
+- **암호화**: TLS 1.3, 양방향 인증.
+  - 각 기기는 AndroidKeyStore에 EC P-256 키와 자체 서명 인증서를 한 번 만들어 둡니다.
+  - 상대는 인증서의 SHA-256 지문으로 식별하고 고정(pinning)합니다. 송신 앱은 TV 이름별로 지문을 기억하고, 바뀌면 연결을 거부합니다.
+- **프레임 형식**: `magic(2) type(1) flags(1) length(4) timeNs(8) payload` (TLS 안에서)
+- **흐름**: HELLO → [PAIR_REQUIRED → PAIR_PROOF ⇄ PAIR_RESULT] → [WAIT_APPROVAL] → CAPS 또는 ERROR → VIDEO_CONFIG / AUDIO_CONFIG → 미디어 프레임
+  - **PIN 증명**: 양쪽이 PIN, 두 인증서 지문, 두 nonce로 HMAC-SHA256을 계산해 주고받습니다(송신/수신 라벨 분리). PIN은 네트워크로 보내지 않습니다.
+  - **ERROR 코드**: `version`(앱 업데이트 필요), `rejected`, `pairing`, `protocol`. v1 송신기는 TLS 단계에서 실패하고, TV에 "앱을 업데이트하세요" 안내가 나옵니다.
+- **연결 유지**: CAPS 이후 양쪽이 1초마다 PING을 보내고, 5초 동안 아무 프레임도 없으면 끊긴 것으로 봅니다.
+- **재연결**:
+  - 송신 앱은 네트워크가 끊기면 1, 2, 4 … 최대 30초 간격으로 다시 연결합니다. 캡처와 인코더는 계속 돌고, 다시 연결되면 코덱 설정을 다시 보내고 키프레임을 요청합니다.
+  - TV는 끊긴 세션의 마지막 화면을 10초 동안 "다시 연결하는 중" 표시와 함께 유지합니다. 같은 기기(지문)가 돌아오면 플레이어를 그대로 이어서 씁니다.
+  - BYE는 의도적인 종료입니다. TV에서 공유를 끝내거나 다른 기기가 넘겨받으면 BYE를 보내서 휴대폰이 재연결하지 않게 합니다.
 - **수신기 → 송신기**: KEYFRAME_REQUEST. 디코더를 다시 만들 때, 화면 출력 대상이 바뀔 때, 키프레임을 기다릴 때 보냅니다(초당 최대 1회).
 - **시계 동기화**: 수신기가 송신기의 UDP 타이밍 포트로 NTP 방식 요청을 보냅니다.
 - **인증 전 제한**:
   - HELLO 페이로드는 최대 16KB이고, 핸드셰이크는 10초 안에 끝나야 합니다.
   - 미인증 연결은 동시에 최대 4개까지 받습니다.
   - 길이 필드는 메모리를 할당하기 전에 검사합니다.
+  - PIN 입력은 최대 2분, 승인 대기는 최대 10초입니다.
+- **테스트**: `HandshakeTest`는 JVM에서 실제 TLS 1.3 핸드셰이크를 돌립니다. `LiveReceiverTest`는 실제 TV에 붙는 선택 테스트입니다.
+  ```sh
+  NSHARE_TV_HOST=<TV IP> NSHARE_SCENARIO=connect ./gradlew :protocol:testDebugUnitTest --tests '*LiveReceiverTest*'
+  # NSHARE_SCENARIO: connect | pin | v1 | drop
+  ```
+
+## AirPlay 세션 감시
+- RTSP 요청, 영상 데이터, 소리 데이터가 8초 동안 하나도 없으면 세션을 닫습니다. 마지막 화면에 멈춰 있지 않게 하기 위해서입니다.
 
 ## 광고
 - `ads/` 모듈이 Unity LevelPlay를 초기화하고 하단 배너를 띄웁니다. TV에서는 대기 화면에만 표시됩니다.
