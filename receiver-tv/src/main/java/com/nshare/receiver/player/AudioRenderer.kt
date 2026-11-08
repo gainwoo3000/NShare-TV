@@ -90,6 +90,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
     private var pendingPacket: AudioPacket? = null
     private var outputsLogged = 0
     private var consecutiveLate = 0
+    private var lateDropsInRow = 0
     private var lastHead = -1L
     private var lastHeadMoveNs = 0L
     private var lastDebugLogNs = 0L
@@ -100,25 +101,27 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
     private var envelope = 0.0
     private var agcGain = 1.0
 
-    private fun applyLevel(pcm: ShortArray) {
+    /** Meters the chunk (returns its peak before gain) and applies the automatic gain. */
+    private fun applyLevel(pcm: ShortArray): Int {
         var peak = 0
         for (v in pcm) {
             val a = if (v < 0) -v.toInt() else v.toInt()
             if (a > peak) peak = a
         }
         if (peak > levelPeak) levelPeak = peak
-        if (!autoGain) return
+        if (!autoGain) return peak
         // Envelope: instant attack, ~10 s release. Gain brings the envelope towards -3 dBFS, at most +12 dB.
         envelope = maxOf(peak.toDouble(), envelope * 0.9990)
         val desired = if (envelope < 300) 1.0 else (23_000.0 / envelope).coerceIn(1.0, 4.0)
         agcGain += (desired - agcGain) * (if (desired < agcGain) 0.5 else 0.01)
-        if (agcGain <= 1.01) return
+        if (agcGain <= 1.01) return peak
         for (i in pcm.indices) {
             val x = pcm[i] * agcGain
             // Soft knee above ~-3 dBFS instead of hard clipping.
             val y = if (x > 23_000) 23_000 + (x - 23_000) / (1 + (x - 23_000) / 9_767) else if (x < -23_000) -23_000 + (x + 23_000) / (1 - (x + 23_000) / 9_767) else x
             pcm[i] = y.toInt().coerceIn(-32768, 32767).toShort()
         }
+        return peak
     }
 
     private fun dbfs(peak: Int): String = if (peak <= 0) "-inf" else "%.1f".format(20 * kotlin.math.log10(peak / 32768.0))
@@ -232,22 +235,34 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
     }
 
     private fun writeScheduled(pcm: ShortArray, remoteNs: Long) {
-        applyLevel(pcm)
+        val silent = applyLevel(pcm) < SILENT_PEAK
         val frames = pcm.size / channels
         if (frames == 0 || !timeline.isReady) return
         val now = System.nanoTime()
+        timeline.onAudioLevel(silent, now)
         val target = timeline.audioPresentationNs(remoteNs)
         val expected = predictNextFrameTime(now)
         val errorNs = expected - target
         stats.audioSyncErrorMs = errorNs / 1e6
         val frameNs = 1_000_000_000L / sampleRate
 
-        if (errorNs <= DROP_THRESHOLD_NS) consecutiveLate = 0
+        val chunkNs = frames * 1_000_000_000L / sampleRate
+        if (errorNs <= DROP_THRESHOLD_NS) {
+            consecutiveLate = 0
+            lateDropsInRow = 0
+        }
         when {
-            errorNs > DROP_THRESHOLD_NS && !timeline.atMaxLatency -> {
-                // Audio would play too late: skip this chunk; the timeline grows latency if this persists.
+            silent && !needsAlignment && errorNs > chunkNs -> {
+                // Behind the timeline (latency is shrinking or a spike just passed): skipping silence
+                // catches up instantly and inaudibly. Stops as soon as audio is back on its slot.
+                stats.audioSilentDropped.incrementAndGet()
+                return
+            }
+            errorNs > DROP_THRESHOLD_NS && lateDropsInRow < MAX_LATE_DROPS_IN_ROW -> {
+                // Audio would play too late: skip this chunk so the backlog drains and lip sync returns.
                 stats.audioDropped.incrementAndGet()
-                if (++consecutiveLate >= 3) {
+                lateDropsInRow++
+                if (!timeline.atMaxLatency && ++consecutiveLate >= 3) {
                     // The output pipeline is slower than the timeline allows: make room for it.
                     timeline.requireLatencyIncrease(errorNs + 20 * Timeline.MS)
                     consecutiveLate = 0
@@ -256,7 +271,8 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
                 return
             }
             errorNs > DROP_THRESHOLD_NS -> {
-                // Latency cannot grow any further: sound slightly out of sync beats no sound.
+                // Still late after a run of drops: play one chunk so sound never disappears entirely.
+                lateDropsInRow = 0
                 needsAlignment = false
                 write(pcm)
             }
@@ -458,6 +474,9 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
          */
         fun maxAdjustFrames(frames: Int): Int = maxOf(3, frames * 6 / 1000)
         private const val TIMESTAMP_REFRESH_NS = 100_000_000L
+        /** Peak below -60 dBFS counts as silence (whispers and quiet backgrounds are far above this). */
+        const val SILENT_PEAK = 33
+        private const val MAX_LATE_DROPS_IN_ROW = 8
         private const val MAX_PENDING_INPUTS = 16
     }
 }

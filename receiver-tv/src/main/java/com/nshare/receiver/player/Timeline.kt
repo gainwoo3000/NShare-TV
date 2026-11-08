@@ -51,6 +51,8 @@ class Timeline(private val clock: ClockSync, mode: LatencyMode, avOffsetMs: Int)
     private val audioTransit = SampleWindow(300)
     private val decodeLatency = SampleWindow(120)
     private var lastUpdateNs = 0L
+    @Volatile private var lastLoudAudioNs = 0L
+    @Volatile private var lastAudioArrivalNs = 0L
     private var clockHadNtp = false
 
     val isReady: Boolean get() = clock.isReady
@@ -66,12 +68,22 @@ class Timeline(private val clock: ClockSync, mode: LatencyMode, avOffsetMs: Int)
     }
 
     fun onAudioArrival(remoteNs: Long, arrivalNs: Long) {
+        lastAudioArrivalNs = arrivalNs
         checkClockSource()
         audioTransit.add(arrivalNs - clock.remoteToLocal(remoteNs))
         maybeUpdate(arrivalNs)
     }
 
     fun onDecodeLatency(ns: Long) = decodeLatency.add(ns)
+
+    /** Reported per decoded audio chunk; silence lets latency shrink fast (silent chunks can be skipped). */
+    fun onAudioLevel(silent: Boolean, nowNs: Long) {
+        if (!silent) lastLoudAudioNs = nowNs
+    }
+
+    /** True when shrinking latency quickly is inaudible: no audio stream, or only silence lately. */
+    fun audioQuiet(nowNs: Long): Boolean =
+        nowNs - lastAudioArrivalNs > NO_AUDIO_NS || nowNs - lastLoudAudioNs > QUIET_NS
 
     val atMaxLatency: Boolean get() = latencyNs >= mode.maxMs * MS
 
@@ -117,10 +129,11 @@ class Timeline(private val clock: ClockSync, mode: LatencyMode, avOffsetMs: Int)
             it + audioOutputLatencyNs + AUDIO_DECODE_NS + m.marginMs * MS
         }
         val need = maxOf(videoNeed ?: 0, audioNeed ?: 0).coerceIn(m.minMs * MS, m.maxMs * MS)
+        val decay = if (audioQuiet(now)) FAST_DECAY_PER_UPDATE_NS else DECAY_PER_UPDATE_NS
         latencyNs = if (need > latencyNs) {
             need
         } else {
-            maxOf(need, latencyNs - DECAY_PER_UPDATE_NS)
+            maxOf(need, latencyNs - decay)
         }
     }
 
@@ -129,6 +142,10 @@ class Timeline(private val clock: ClockSync, mode: LatencyMode, avOffsetMs: Int)
         private const val UPDATE_INTERVAL_NS = 250 * MS
         /** 1.25 ms per 250 ms = 5 ms/s: slow enough for audio to follow by resampling. */
         private const val DECAY_PER_UPDATE_NS = 1_250_000L
+        /** 12.5 ms per 250 ms = 50 ms/s, used while audio is silent or absent (silent chunks get skipped). */
+        private const val FAST_DECAY_PER_UPDATE_NS = 12_500_000L
+        private const val QUIET_NS = 300 * MS
+        private const val NO_AUDIO_NS = 1_000 * MS
         private const val AUDIO_DECODE_NS = 12 * MS
     }
 }

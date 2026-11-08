@@ -34,7 +34,7 @@
     <string name="stats_latency">Delay   target %1$d ms (%2$s) · network p95 %3$.0f ms · decode p95 %4$.0f ms</string>
     <string name="stats_frames">        late frames %1$d · skipped %2$d · decoder resets %3$d</string>
     <string name="stats_audio">Audio   sync error %1$+.1f ms · output latency %2$.0f ms (%3$s)</string>
-    <string name="stats_audio2">        dropped %1$d · silence %2$d ms · underruns %3$d</string>
+    <string name="stats_audio2">        dropped %1$d (+%4$d silent) · silence %2$d ms · underruns %3$d</string>
     <string name="stats_offset">Offset  %1$s · clock %2$s</string>
     <string name="clock_arrival">arrival estimate</string>
 </resources>

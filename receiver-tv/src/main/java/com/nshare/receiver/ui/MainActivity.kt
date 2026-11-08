@@ -209,7 +209,11 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
             )
             appendLine(getString(R.string.stats_audio, s.audioSyncErrorMs, t.audioOutputLatencyNs / 1e6, s.audioPerfMode))
             appendLine(
-                getString(R.string.stats_audio2, s.audioDropped.get().toInt(), s.audioSilenceMs.get().toInt(), s.audioUnderruns.get().toInt()),
+                getString(
+                    R.string.stats_audio2,
+                    s.audioDropped.get().toInt(), s.audioSilenceMs.get().toInt(), s.audioUnderruns.get().toInt(),
+                    s.audioSilentDropped.get().toInt(),
+                ),
             )
             append(getString(R.string.stats_offset, formatOffset((t.avOffsetNs / 1_000_000).toInt()), clock))
         }

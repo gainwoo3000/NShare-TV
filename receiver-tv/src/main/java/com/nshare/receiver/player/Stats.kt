@@ -12,6 +12,7 @@ class Stats {
     val videoDecoderResets = AtomicLong()
     val audioPacketsIn = AtomicLong()
     val audioDropped = AtomicLong()
+    val audioSilentDropped = AtomicLong()
     val audioSilenceMs = AtomicLong()
     val audioUnderruns = AtomicLong()
 
