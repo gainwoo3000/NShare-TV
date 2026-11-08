@@ -33,15 +33,18 @@ airplay/        AirPlay 호환 수신 라이브러리 (Kotlin)
   stream/       미러링 영상(TCP, AES-CTR) / 오디오(UDP RTP, AES-CBC) 수신
   time/         NTP 시계 동기화
   src/main/cpp/ FairPlay (playfair, GPLv3)
-protocol/       NShare 프로토콜 (송수신 공통)
-common/         앱 언어 설정 (한국어 / English / 시스템)
+protocol/       NShare 프로토콜 (송수신 공통, NShare-Mobile과 동일하게 유지)
+common/         앱 언어 설정, Wi-Fi 저지연 락 (NShare-Mobile과 동일하게 유지)
 ads/            Unity LevelPlay 배너 (+ AdMob 미디에이션)
 ```
 
 ### 품질과 싱크 설계
 - 영상과 소리 모두 **송신 측 캡처 시각**을 기준으로 같은 시간축에 맞춰 재생합니다.
 - 재생 지연은 네트워크 지연, 디코딩 시간, 오디오 출력 지연을 측정해서 자동으로 조절합니다.
-- 소리 오차가 작으면 미세 리샘플링으로 흡수하고, 오차가 크면 무음을 넣거나 버립니다.
+- 소리 오차가 작으면 미세 리샘플링(청크 길이의 약 0.6%)으로 흡수하고, 오차가 크면 무음을 넣거나 버립니다.
+- 소리가 늦을 때는 무음 청크부터 건너뛰어 따라잡습니다. 소리가 없거나 무음이면 지연을 초당 50ms로 빠르게 줄이고, 소리가 나는 동안에는 초당 5ms로 줄입니다.
+- 스트리밍 중에는 Wi-Fi 저지연 락(`WIFI_MODE_FULL_LOW_LATENCY`)을 잡고, AudioTrack 저지연 모드를 요청합니다(기기가 거부하면 기본 경로).
+  - Google TV Streamer는 HDMI 출력이 DEEP_BUFFER 경로라서, 오디오 출력 지연이 약 210ms로 고정되고 이 값이 전체 지연을 결정합니다.
 - 영상은 하드웨어 디코더와 저지연 모드를 쓰고, 타임스탬프에 맞춰 정확한 vsync에 표시합니다.
 - macOS 송신기처럼 SPS에 재정렬 정보가 없는 H.264 스트림은 수신 측에서 SPS를 고쳐 디코더 지연을 없앱니다.
 
@@ -81,8 +84,13 @@ adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Vide
 ## NShare 프로토콜 (v1)
 - **발견**: mDNS `_nshare._tcp`, TCP 포트 7100
 - **프레임 형식**: `magic(2) type(1) flags(1) length(4) timeNs(8) payload`
-- **흐름**: HELLO → CAPS(수신기 해상도·코덱) → VIDEO_CONFIG / AUDIO_CONFIG → 미디어 프레임 (수신기 → 송신기: KEYFRAME_REQUEST)
+- **흐름**: HELLO → CAPS(수신기 해상도·코덱) → VIDEO_CONFIG / AUDIO_CONFIG → 미디어 프레임
+- **수신기 → 송신기**: KEYFRAME_REQUEST. 디코더를 다시 만들 때, 화면 출력 대상이 바뀔 때, 키프레임을 기다릴 때 보냅니다(초당 최대 1회).
 - **시계 동기화**: 수신기가 송신기의 UDP 타이밍 포트로 NTP 방식 요청을 보냅니다.
+- **인증 전 제한**:
+  - HELLO 페이로드는 최대 16KB이고, 핸드셰이크는 10초 안에 끝나야 합니다.
+  - 미인증 연결은 동시에 최대 4개까지 받습니다.
+  - 길이 필드는 메모리를 할당하기 전에 검사합니다.
 
 ## 광고
 - `ads/` 모듈이 Unity LevelPlay를 초기화하고 하단 배너를 띄웁니다. TV에서는 대기 화면에만 표시됩니다.
