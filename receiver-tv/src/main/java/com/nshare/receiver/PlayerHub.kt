@@ -125,6 +125,7 @@ object PlayerHub {
     /** playpause / nextitem / previtem from the TV remote while music is shown. */
     fun mediaCommand(context: Context, command: String) {
         val sent = if (demoNowPlaying) true else mediaRemote?.invoke(command) ?: false
+        Log.i(TAG, "remote $command: ${if (sent) "sent" else "not available"}")
         if (!sent) {
             showNotice(context.getString(R.string.now_playing_no_remote))
             return

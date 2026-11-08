@@ -92,4 +92,6 @@
     <string name="settings_allow_needed">Allow</string>
     <string name="settings_auto_open_unavailable">This TV has no settings page for this permission.</string>
     <string name="now_playing_no_remote">This device doesn\'t accept playback control from the TV.</string>
+    <string name="settings_airplay_1080">Limit AirPlay mirroring to 1080p</string>
+    <string name="settings_airplay_1080_desc">Try this if HDR videos above 720p fail to play on an iPhone while mirroring. The iPhone then encodes 1080p instead of 4K.</string>
 </resources>

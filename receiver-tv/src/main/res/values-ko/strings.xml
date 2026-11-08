@@ -88,4 +88,6 @@
     <string name="settings_allow_needed">허용 필요</string>
     <string name="settings_auto_open_unavailable">이 TV에는 이 권한을 바꾸는 설정 화면이 없습니다.</string>
     <string name="now_playing_no_remote">이 기기는 TV에서 재생을 제어할 수 없습니다.</string>
+    <string name="settings_airplay_1080">AirPlay 미러링 1080p로 제한</string>
+    <string name="settings_airplay_1080_desc">미러링 중 아이폰에서 1080p 이상 HDR 영상이 재생되지 않으면 켜 보세요. 아이폰이 4K 대신 1080p로 화면을 보냅니다.</string>
 </resources>

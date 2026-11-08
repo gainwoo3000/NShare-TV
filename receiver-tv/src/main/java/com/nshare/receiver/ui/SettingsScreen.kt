@@ -118,6 +118,17 @@ fun SettingsScreen() {
                 }
             }
             item {
+                val capped = remember(version) { DeviceIdentity.airPlay1080(context) }
+                ToggleRow(
+                    title = stringResource(R.string.settings_airplay_1080),
+                    description = stringResource(R.string.settings_airplay_1080_desc),
+                    checked = capped,
+                ) {
+                    DeviceIdentity.setAirPlay1080(context, !capped)
+                    version++
+                }
+            }
+            item {
                 // Re-checked while the page is open, so returning from the system page updates it.
                 var canOverlay by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
                 LaunchedEffect(Unit) {

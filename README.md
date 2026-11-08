@@ -142,6 +142,7 @@ adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Vide
 - 곡 제목·아티스트·앨범(DMAP), 커버(JPEG/PNG), 재생 위치(progress)를 받아 재생 화면을 띄웁니다. 커버를 흐리게 깐 배경 위에 유리 패널을 둡니다.
 - 리모컨: OK(재생/일시정지 키) = 재생/일시정지, ◀▶(이전/다음 키) = 이전 곡/다음 곡, 메뉴 키 = 진단 정보. DACP(`_dacp._tcp`, `/ctrl-int/1/playpause` 등)로 iPhone에 명령을 보냅니다.
 - 가사는 AirPlay로 전달되지 않아서 표시할 수 없습니다.
+- 설정 → "AirPlay 미러링 1080p로 제한": 아이폰에 4K 대신 1080p 화면을 알립니다(HEVC 유지, Android 송신기는 영향 없음). 미러링 중 1080p 이상 HDR 영상이 재생되지 않을 때 시험용입니다.
 - 디버그 빌드에서는 `adb shell am start -n namu0329.nshare.receiver/com.nshare.receiver.ui.MainActivity --ez demo_now_playing true`로 예시 화면을 볼 수 있습니다.
 
 ## 다른 앱을 보는 중에 연결되면

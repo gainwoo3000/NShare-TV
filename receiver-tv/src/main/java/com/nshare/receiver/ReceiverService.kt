@@ -38,7 +38,7 @@ class ReceiverService : Service() {
         if (key == "airplay_security" || key == "airplay_password") server?.refreshAdvertisement()
     }
     private val identityPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == DeviceIdentity.KEY_NAME) restartServers()
+        if (key == DeviceIdentity.KEY_NAME || key == DeviceIdentity.KEY_AIRPLAY_1080) restartServers()
     }
     /** Starts and stops the receivers off the main thread (stopping waits for sockets to close). */
     private val serverThread = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "nshare-servers") }
@@ -68,7 +68,17 @@ class ReceiverService : Service() {
         val config = DeviceIdentity.load(this)
         PlayerHub.receiverName = config.name
         startNsp(config)
-        server = AirPlayServer(this, config, listener, AirPlayAccessAdapter(this)).also {
+        // Optional 1080p cap for AirPlay only (Android senders keep the full resolution).
+        val airPlayConfig = if (DeviceIdentity.airPlay1080(this) && config.displayWidth > 1920) {
+            Log.i(TAG, "AirPlay limited to 1920x1080")
+            com.nshare.airplay.ReceiverConfig(
+                config.name, config.deviceId, config.pairingId, config.identitySecret,
+                displayWidth = 1920, displayHeight = 1080, maxFps = config.maxFps, port = config.port, hevc = config.hevc,
+            )
+        } else {
+            config
+        }
+        server = AirPlayServer(this, airPlayConfig, listener, AirPlayAccessAdapter(this)).also {
             try {
                 it.start()
                 PlayerHub.receiverPort = it.port

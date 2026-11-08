@@ -34,6 +34,12 @@ class Settings(context: Context) {
 /** Stable identity of this receiver: name, hardware-style id and pairing key. */
 object DeviceIdentity {
     const val KEY_NAME = "name"
+    /** Advertise a 1080p display to AirPlay senders instead of 4K (an experiment for HDR video). */
+    const val KEY_AIRPLAY_1080 = "airplay_1080p"
+
+    fun airPlay1080(context: Context): Boolean = prefs(context).getBoolean(KEY_AIRPLAY_1080, false)
+
+    fun setAirPlay1080(context: Context, on: Boolean) = prefs(context).edit().putBoolean(KEY_AIRPLAY_1080, on).apply()
     /** mDNS instance names are limited to 63 bytes; AirPlay prefixes "<12 hex>@". */
     const val MAX_NAME_BYTES = 50
 

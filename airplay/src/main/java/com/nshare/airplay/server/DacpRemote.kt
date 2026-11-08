@@ -28,12 +28,15 @@ class DacpRemote(
     @Volatile private var port = 0
 
     fun send(command: String) = executor.execute {
+        Log.i(TAG, "$command requested (DACP-ID $dacpId, known port $port)")
         if (port == 0 && !discover()) {
             Log.w(TAG, "sender's remote control service not found (iTunes_Ctrl_$dacpId)")
             return@execute
         }
         try {
-            val url = URL("http://${host ?: senderAddress}:$port/ctrl-int/1/$command")
+            val h = (host ?: senderAddress).substringBefore('%') // drop an IPv6 scope id
+            // IPv6 literals (iPhones often connect over IPv6) must be bracketed in a URL.
+            val url = URL("http://${if (h.contains(':')) "[$h]" else h}:$port/ctrl-int/1/$command")
             val c = url.openConnection() as HttpURLConnection
             c.connectTimeout = 2_000
             c.readTimeout = 2_000
@@ -62,6 +65,7 @@ class DacpRemote(
                     override fun onServiceResolved(r: NsdServiceInfo) {
                         host = r.host?.hostAddress
                         port = r.port
+                        Log.i(TAG, "remote control service at $host:$port")
                         found.countDown()
                     }
 

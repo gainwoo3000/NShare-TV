@@ -98,7 +98,10 @@ internal class RtspSession(
 
     /** Sends a DACP command (playpause, nextitem, previtem) to this sender; false if it has none. */
     fun sendRemote(command: String): Boolean {
-        val d = dacp ?: return false
+        val d = dacp ?: run {
+            Log.i(TAG, "$command: this sender announced no remote control (no DACP-ID / Active-Remote)")
+            return false
+        }
         d.send(command)
         return true
     }
@@ -108,7 +111,10 @@ internal class RtspSession(
         if (dacp == null) {
             val id = req.header("DACP-ID")
             val token = req.header("Active-Remote")
-            if (id != null && token != null) dacp = DacpRemote(server.context, id, token, remoteAddress)
+            if (id != null && token != null) {
+                dacp = DacpRemote(server.context, id, token, remoteAddress)
+                Log.i(TAG, "sender offers playback remote control (DACP-ID $id)")
+            }
         }
         when (req.method) {
             "GET" -> if (req.path.startsWith("/info")) handleInfo(req, res) else res.status(404, "Not Found")
