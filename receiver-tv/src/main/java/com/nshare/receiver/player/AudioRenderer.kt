@@ -87,6 +87,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
     private var outputLatencyNs = 40_000_000L
     private var appliedGain = -1f
     private val inputTimes = ArrayDeque<Long>()
+    private var pendingPacket: AudioPacket? = null
     private var outputsLogged = 0
     private var consecutiveLate = 0
     private var lastHead = -1L
@@ -168,6 +169,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
                     track.play()
                     framesWritten = 0
                     inputTimes.clear()
+                    pendingPacket = null
                     tsValid = false
                     needsAlignment = true
                 }
@@ -175,7 +177,9 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
                     appliedGain = gain
                     track.setVolume(appliedGain)
                 }
-                val packet = queue.poll(20, TimeUnit.MILLISECONDS)
+                // A packet the decoder had no room for is retried first instead of being dropped.
+                val packet = pendingPacket ?: queue.poll(20, TimeUnit.MILLISECONDS)
+                pendingPacket = null
                 if (packet != null) {
                     val index = codec.dequeueInputBuffer(20_000)
                     if (index >= 0) {
@@ -188,7 +192,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
                         inputTimes.addLast(packet.remoteNs)
                         while (inputTimes.size > MAX_PENDING_INPUTS) inputTimes.removeFirst()
                     } else {
-                        stats.audioDropped.incrementAndGet()
+                        pendingPacket = packet
                     }
                 }
                 while (true) {
