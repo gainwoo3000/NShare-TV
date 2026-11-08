@@ -87,7 +87,6 @@ internal class RtspSession(
     }
 
     fun close() {
-        if (pin != null && pinPairedKey == null) server.access.showPin(null)
         try { socket.close() } catch (_: Exception) {}
         stopStreams()
     }
@@ -235,8 +234,6 @@ internal class RtspSession(
 
     // ------------------------------------------------------------------ access control (PIN / password)
 
-    private var srp: SrpServer? = null
-    private var pin: String? = null
     /** Ed25519 key of the device that completed pair-setup-pin on this connection. */
     private var pinPairedKey: ByteArray? = null
     private var pinAuthorized = false
@@ -244,9 +241,8 @@ internal class RtspSession(
     private var passwordOk = false
 
     private fun handlePairPinStart(res: RtspResponse) {
-        val code = "%04d".format(java.security.SecureRandom().nextInt(10_000))
-        pin = code
-        server.access.showPin(code)
+        // A repeated request while the code is on screen keeps the same code.
+        if (server.pinPairing == null) server.startPinPairing()
         Log.i(TAG, "pair-pin-start: showing a PIN on screen")
     }
 
@@ -254,19 +250,19 @@ internal class RtspSession(
     private fun handlePairSetupPin(req: RtspRequest, res: RtspResponse) {
         @Suppress("UNCHECKED_CAST")
         val body = (if (BinaryPlist.isBinaryPlist(req.body)) BinaryPlist.decode(req.body) else null) as? Map<String, Any?>
-        val code = pin
-        if (body == null || code == null) {
+        val pairing = server.pinPairing
+        if (body == null || pairing == null) {
             res.status(470, "Connection Authorization Required")
             return
         }
         when {
             body.string("user") != null -> {
-                val s = SrpServer(body.string("user")!!, code)
-                srp = s
+                val s = SrpServer(body.string("user")!!, pairing.pin)
+                pairing.srp = s
                 res.body(PLIST, BinaryPlist.encode(linkedMapOf("pk" to s.publicKey, "salt" to s.salt)))
             }
             body.data("proof") != null && body.data("pk") != null -> {
-                val proof = srp?.verify(body.data("pk")!!, body.data("proof")!!)
+                val proof = pairing.srp?.verify(body.data("pk")!!, body.data("proof")!!)
                 if (proof == null) {
                     Log.i(TAG, "pair-setup-pin: wrong PIN")
                     res.status(470, "Connection Authorization Required")
@@ -275,7 +271,7 @@ internal class RtspSession(
                 res.body(PLIST, BinaryPlist.encode(mapOf("proof" to proof)))
             }
             body.data("epk") != null && body.data("authTag") != null -> {
-                val key = srp?.sessionKey ?: run {
+                val key = pairing.srp?.sessionKey ?: run {
                     res.status(470, "Connection Authorization Required")
                     return
                 }
@@ -292,8 +288,9 @@ internal class RtspSession(
                 iv[15]++ // the reply uses the next nonce
                 val sealed = gcm(javax.crypto.Cipher.ENCRYPT_MODE, aesKey, iv, identity.publicKey)
                 pinPairedKey = clientKey
-                srp = null
-                server.access.showPin(null)
+                // Remember right away: the device may continue with pair-verify on a new connection.
+                server.access.rememberClient(Bytes.hex(clientKey), "Apple device")
+                server.endPinPairing()
                 Log.i(TAG, "pair-setup-pin: paired")
                 res.body(PLIST, BinaryPlist.encode(linkedMapOf("epk" to sealed.copyOf(32), "authTag" to sealed.copyOfRange(32, 48))))
             }

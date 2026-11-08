@@ -68,7 +68,36 @@ class AirPlayServer(
      * stream is paused (locked screen). Nothing at all for 8 s means the sender is gone (e.g. left
      * Wi-Fi without a TEARDOWN): release the session instead of freezing on the last frame.
      */
+    /**
+     * On-screen PIN pairing in progress. Apple devices send /pair-pin-start and /pair-setup-pin on
+     * different connections, so the PIN and SRP state live here rather than in a session.
+     */
+    internal class PinPairing(val pin: String) {
+        val startedNs = System.nanoTime()
+        @Volatile var srp: com.nshare.airplay.crypto.SrpServer? = null
+    }
+
+    @Volatile internal var pinPairing: PinPairing? = null
+
+    internal fun startPinPairing(): String {
+        val pin = "%04d".format(java.security.SecureRandom().nextInt(10_000))
+        pinPairing = PinPairing(pin)
+        access.showPin(pin)
+        return pin
+    }
+
+    internal fun endPinPairing() {
+        pinPairing = null
+        access.showPin(null)
+    }
+
     private fun checkIdleSessions() {
+        pinPairing?.let {
+            if ((System.nanoTime() - it.startedNs) / 1_000_000 > PIN_TIMEOUT_MS) {
+                Log.i(TAG, "PIN pairing timed out")
+                endPinPairing()
+            }
+        }
         val now = System.nanoTime()
         for (s in sessions) {
             if (!s.isStreaming) continue
@@ -147,5 +176,7 @@ class AirPlayServer(
     companion object {
         private const val TAG = "NShare.Server"
         private const val SESSION_IDLE_TIMEOUT_MS = 8_000L
+        /** How long the on-screen code stays valid (the user may be typing it). */
+        private const val PIN_TIMEOUT_MS = 120_000L
     }
 }
