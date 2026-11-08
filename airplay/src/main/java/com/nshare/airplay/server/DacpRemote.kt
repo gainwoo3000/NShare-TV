@@ -4,8 +4,6 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.util.Log
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -35,19 +33,33 @@ class DacpRemote(
         }
         try {
             val h = (host ?: senderAddress).substringBefore('%') // drop an IPv6 scope id
-            // IPv6 literals (iPhones often connect over IPv6) must be bracketed in a URL.
-            val url = URL("http://${if (h.contains(':')) "[$h]" else h}:$port/ctrl-int/1/$command")
-            val c = url.openConnection() as HttpURLConnection
-            c.connectTimeout = 2_000
-            c.readTimeout = 2_000
-            c.setRequestProperty("Active-Remote", activeRemote)
-            val code = c.responseCode
-            c.disconnect()
+            val code = get(h, port, "/ctrl-int/1/$command")
             Log.i(TAG, "$command -> $code")
             if (code >= 400) port = 0 // look the service up again next time
         } catch (e: Exception) {
             Log.w(TAG, "$command failed: ${e.message}")
             port = 0
+        }
+    }
+
+    /**
+     * Minimal HTTP/1.1 GET over a plain socket. HttpURLConnection is not used because Android
+     * blocks cleartext HTTP by default, and enabling it app-wide just for this would be broader
+     * than needed. Returns the status code (204 = done).
+     */
+    private fun get(host: String, port: Int, path: String): Int {
+        java.net.Socket().use { s ->
+            s.connect(java.net.InetSocketAddress(host, port), 2_000)
+            s.soTimeout = 2_000
+            val hostHeader = if (host.contains(':')) "[$host]:$port" else "$host:$port"
+            val req = "GET $path HTTP/1.1\r\nHost: $hostHeader\r\nActive-Remote: $activeRemote\r\nConnection: close\r\n\r\n"
+            s.getOutputStream().apply {
+                write(req.toByteArray(Charsets.US_ASCII))
+                flush()
+            }
+            val status = s.getInputStream().bufferedReader(Charsets.US_ASCII).readLine() ?: return -1
+            // "HTTP/1.1 204 No Content"
+            return status.split(' ').getOrNull(1)?.toIntOrNull() ?: -1
         }
     }
 
