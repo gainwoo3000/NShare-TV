@@ -88,6 +88,16 @@ class MirrorPlayer(
     /** When the last audio packet arrived (elapsedRealtime); music is paused when packets stop. */
     @Volatile var lastAudioPacketMs = 0L
         private set
+    /** When audio started flowing again after a gap. */
+    @Volatile var audioFlowStartMs = 0L
+        private set
+
+    /**
+     * Music is playing: packets keep arriving, and have done so for a moment. A short burst alone
+     * (a sender pre-rolling the next track while paused) does not count.
+     */
+    fun audioFlowing(nowMs: Long): Boolean =
+        nowMs - lastAudioPacketMs < AUDIO_GAP_MS && nowMs - audioFlowStartMs >= AUDIO_SUSTAIN_MS
 
     override val audio: AudioSink = object : AudioSink {
         override fun onAudioStart(format: AudioFormat) {
@@ -97,7 +107,9 @@ class MirrorPlayer(
         }
 
         override fun onAudioPacket(packet: AudioPacket) {
-            lastAudioPacketMs = android.os.SystemClock.elapsedRealtime()
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastAudioPacketMs > AUDIO_GAP_MS) audioFlowStartMs = now
+            lastAudioPacketMs = now
             timeline.onAudioArrival(packet.remoteNs, packet.arrivalNs)
             audioRenderer.submit(packet)
         }
@@ -117,5 +129,10 @@ class MirrorPlayer(
         audioRenderer.stop()
         videoRenderer.release()
         events.onEnded(this)
+    }
+
+    private companion object {
+        const val AUDIO_GAP_MS = 700L
+        const val AUDIO_SUSTAIN_MS = 800L
     }
 }

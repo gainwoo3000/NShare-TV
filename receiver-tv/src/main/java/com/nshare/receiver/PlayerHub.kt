@@ -187,11 +187,12 @@ object PlayerHub {
             val p = player ?: return
             val now = android.os.SystemClock.elapsedRealtime()
             if (now >= musicStateOverrideUntilMs) {
-                val flowing = now - p.lastAudioPacketMs < 700
+                val flowing = p.audioFlowing(now)
                 if (flowing && np.paused) {
                     nowPlaying = np.copy(atMs = now, paused = false)
-                } else if (!flowing && !np.paused) {
-                    nowPlaying = np.copy(elapsedMs = np.positionMs(p.lastAudioPacketMs), atMs = now, paused = true)
+                } else if (!flowing && !np.paused && now - p.lastAudioPacketMs >= 700) {
+                    // Freeze where the sound stopped (never before the last reported position).
+                    nowPlaying = np.copy(elapsedMs = np.positionMs(maxOf(p.lastAudioPacketMs, np.atMs)), atMs = now, paused = true)
                 }
             }
             main.postDelayed(this, 250)
@@ -403,7 +404,15 @@ object PlayerHub {
         }
 
         override fun onTrackInfo(player: MirrorPlayer, info: com.nshare.airplay.TrackInfo) =
-            updateNowPlaying(player) { it.copy(title = info.title, artist = info.artist, album = info.album) }
+            updateNowPlaying(player) {
+                val newTrack = it.title != info.title || it.artist != info.artist
+                // A new track starts at 0 until the sender reports its progress.
+                if (newTrack) {
+                    it.copy(title = info.title, artist = info.artist, album = info.album, elapsedMs = 0, atMs = android.os.SystemClock.elapsedRealtime())
+                } else {
+                    it.copy(title = info.title, artist = info.artist, album = info.album)
+                }
+            }
 
         override fun onArtwork(player: MirrorPlayer, image: ByteArray?) {
             // Decoding a large cover takes a while: off the main thread, scaled to what the screen shows.

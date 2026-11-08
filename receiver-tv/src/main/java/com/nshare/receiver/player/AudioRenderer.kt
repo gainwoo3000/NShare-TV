@@ -564,6 +564,10 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         val lowLatency = track.performanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
         stats.audioPerfMode = if (lowLatency) "low-latency" else "default"
         Log.i(TAG, "AudioTrack perfMode=${stats.audioPerfMode}")
+        // A new track starts at full volume: apply the sender's volume before anything plays
+        // (the stream is recreated on every track change / resume, the volume is only sent once).
+        track.setVolume(gain)
+        appliedGain = gain
         return track
     }
 
