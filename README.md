@@ -54,6 +54,7 @@ ads/            Unity LevelPlay 배너 (+ AdMob 미디에이션)
 ```sh
 ./gradlew :receiver-tv:assembleDebug        # 테스트용 APK
 ./gradlew :receiver-tv:bundleRelease        # Google Play 업로드용 AAB
+./gradlew :receiver-tv:assembleProfile      # 출시 빌드와 같은 최적화 + 디버그 키 서명 (디버그 빌드 위에 설치, 실제 속도 확인용)
 ./gradlew :airplay:testDebugUnitTest :protocol:testDebugUnitTest
 ```
 

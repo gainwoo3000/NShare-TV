@@ -46,6 +46,13 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("upload") ?: signingConfigs.getByName("debug")
         }
+        // Release code (R8, not debuggable) signed with the debug key: installs over a debug build
+        // on the TV, for checking real UI performance. ./gradlew :receiver-tv:assembleProfile
+        create("profile") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+        }
     }
 
     buildFeatures {
