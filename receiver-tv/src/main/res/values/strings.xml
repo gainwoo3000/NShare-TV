@@ -76,4 +76,8 @@
     <string name="notice_old_sender">An older NShare app tried to connect. Update the NShare app on the phone.</string>
     <string name="airplay_pin_title">AirPlay code</string>
     <string name="airplay_pin_body">Enter this code on your iPhone, iPad or Mac</string>
+    <string name="settings_device">Device</string>
+    <string name="settings_tv_name">TV name</string>
+    <string name="settings_tv_name_desc">Shown on phones and Apple devices</string>
+    <string name="settings_tv_name_hint">Shown on phones and Apple devices. Leave empty to use the default name (%1$s).</string>
 </resources>

@@ -66,7 +66,8 @@ object PlayerHub {
         private set
 
     /** Receiver name / address for the idle screen, set by the service. */
-    @Volatile var receiverName: String = ""
+    /** Observable so the idle screen follows a rename. */
+    var receiverName by mutableStateOf("")
     @Volatile var receiverPort: Int = 0
     private var disconnectCurrent: (() -> Unit)? = null
     private var wifiLock: WifiLatencyLock? = null

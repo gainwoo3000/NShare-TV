@@ -33,8 +33,27 @@ class Settings(context: Context) {
 
 /** Stable identity of this receiver: name, hardware-style id and pairing key. */
 object DeviceIdentity {
+    const val KEY_NAME = "name"
+    /** mDNS instance names are limited to 63 bytes; AirPlay prefixes "<12 hex>@". */
+    const val MAX_NAME_BYTES = 50
+
+    fun prefs(context: Context) = context.applicationContext.getSharedPreferences("identity", Context.MODE_PRIVATE)
+
+    fun defaultName(context: Context): String =
+        "NShare-" + (prefs(context).getString("device_id", null) ?: "").replace(":", "").takeLast(4)
+
+    fun name(context: Context): String = prefs(context).getString(KEY_NAME, null) ?: defaultName(context)
+
+    fun isValidName(name: String) = name.isNotBlank() && name.trim().toByteArray().size <= MAX_NAME_BYTES
+
+    /** Blank resets to the default name. Receivers restart under the new name (see ReceiverService). */
+    fun setName(context: Context, name: String) {
+        val n = name.trim()
+        prefs(context).edit().apply { if (n.isEmpty()) remove(KEY_NAME) else putString(KEY_NAME, n) }.apply()
+    }
+
     fun load(context: Context): ReceiverConfig {
-        val prefs = context.getSharedPreferences("identity", Context.MODE_PRIVATE)
+        val prefs = prefs(context)
         var deviceId = prefs.getString("device_id", null)
         var pairingId = prefs.getString("pairing_id", null)
         var secret = prefs.getString("identity_secret", null)?.let { Base64.decode(it, Base64.NO_WRAP) }
@@ -50,7 +69,7 @@ object DeviceIdentity {
                 .putString("identity_secret", Base64.encodeToString(secret, Base64.NO_WRAP))
                 .apply()
         }
-        val name = prefs.getString("name", null) ?: ("NShare-" + deviceId.replace(":", "").takeLast(4))
+        val name = prefs.getString(KEY_NAME, null) ?: ("NShare-" + deviceId.replace(":", "").takeLast(4))
         val uhd = supportsHevc4k60()
         Log.i("NShare.Identity", "advertising ${if (uhd) "3840x2160 HEVC" else "1920x1080 H.264"}")
         return ReceiverConfig(

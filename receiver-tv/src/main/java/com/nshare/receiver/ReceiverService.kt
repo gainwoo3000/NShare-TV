@@ -37,35 +37,59 @@ class ReceiverService : Service() {
         // pw / status flags in the AirPlay TXT records follow the security setting.
         if (key == "airplay_security" || key == "airplay_password") server?.refreshAdvertisement()
     }
+    private val identityPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == DeviceIdentity.KEY_NAME) restartServers()
+    }
+    /** Starts and stops the receivers off the main thread (stopping waits for sockets to close). */
+    private val serverThread = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "nshare-servers") }
+    private val listener = object : ReceiverListener {
+        override fun onSessionStart(client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks =
+            PlayerHub.startSession(this@ReceiverService, client, clock, key = airPlayKey(client), disconnect = disconnect)
+
+        override fun approveSession(client: ClientInfo): Boolean =
+            PlayerHub.requestApproval(this@ReceiverService, client.name ?: client.model ?: client.address, airPlayKey(client))
+    }
 
     override fun onCreate() {
         super.onCreate()
         PlayerHub.attach(this)
         startAsForeground()
-        val config = DeviceIdentity.load(this)
         multicastLock = (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
             .createMulticastLock("nshare-mdns").apply {
                 setReferenceCounted(false)
                 acquire()
             }
-        val listener = object : ReceiverListener {
-            override fun onSessionStart(client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks =
-                PlayerHub.startSession(this@ReceiverService, client, clock, key = airPlayKey(client), disconnect = disconnect)
-
-            override fun approveSession(client: ClientInfo): Boolean =
-                PlayerHub.requestApproval(this@ReceiverService, client.name ?: client.model ?: client.address, airPlayKey(client))
-        }
-        startNsp(config)
         getSharedPreferences("security", Context.MODE_PRIVATE).registerOnSharedPreferenceChangeListener(securityPrefsListener)
+        DeviceIdentity.prefs(this).registerOnSharedPreferenceChangeListener(identityPrefsListener)
+        serverThread.execute { startServers() }
+    }
+
+    private fun startServers() {
+        val config = DeviceIdentity.load(this)
+        PlayerHub.receiverName = config.name
+        startNsp(config)
         server = AirPlayServer(this, config, listener, AirPlayAccessAdapter(this)).also {
             try {
                 it.start()
-                PlayerHub.receiverName = config.name
                 PlayerHub.receiverPort = it.port
             } catch (e: Exception) {
                 Log.e(TAG, "failed to start AirPlay receiver", e)
             }
         }
+    }
+
+    private fun stopServers() {
+        server?.stop()
+        server = null
+        nspServer?.stop()
+        nspServer = null
+    }
+
+    /** The TV was renamed: advertise (AirPlay + NShare) under the new name. */
+    private fun restartServers() = serverThread.execute {
+        Log.i(TAG, "receiver renamed, restarting")
+        stopServers()
+        startServers()
     }
 
     private fun startNsp(config: com.nshare.airplay.ReceiverConfig) {
@@ -85,10 +109,9 @@ class ReceiverService : Service() {
 
     override fun onDestroy() {
         getSharedPreferences("security", Context.MODE_PRIVATE).unregisterOnSharedPreferenceChangeListener(securityPrefsListener)
-        server?.stop()
-        server = null
-        nspServer?.stop()
-        nspServer = null
+        DeviceIdentity.prefs(this).unregisterOnSharedPreferenceChangeListener(identityPrefsListener)
+        serverThread.execute { stopServers() }
+        serverThread.shutdown()
         multicastLock?.release()
         super.onDestroy()
     }

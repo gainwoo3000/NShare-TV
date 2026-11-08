@@ -35,6 +35,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Button
@@ -43,6 +44,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.OutlinedButton
 import androidx.tv.material3.Switch
 import androidx.tv.material3.Text
+import com.nshare.receiver.DeviceIdentity
 import com.nshare.receiver.R
 import com.nshare.receiver.security.AirPlaySecurity
 import com.nshare.receiver.security.SecuritySettings
@@ -59,6 +61,9 @@ fun SettingsScreen() {
     // Bumped on every change so the screen re-reads the stores.
     var version by remember { mutableIntStateOf(0) }
     var editingPassword by remember { mutableStateOf(false) }
+    var editingName by remember { mutableStateOf(false) }
+    val tvName = remember(version) { DeviceIdentity.name(context) }
+    val defaultName = remember { DeviceIdentity.defaultName(context) }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
 
@@ -67,6 +72,7 @@ fun SettingsScreen() {
     val airplay = remember(version) { security.airPlaySecurity }
     val password = remember(version) { security.airPlayPassword }
     val trusted = remember(version) { trustedStore.all() }
+    val dateFormat = remember { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT) }
 
     Box(
         Modifier
@@ -84,6 +90,35 @@ fun SettingsScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(20.dp))
+                SectionTitle(stringResource(R.string.settings_device))
+            }
+            item {
+                if (editingName) {
+                    TextEditor(
+                        hint = stringResource(R.string.settings_tv_name_hint, defaultName),
+                        initial = tvName,
+                        password = false,
+                        isValid = { it.isBlank() || DeviceIdentity.isValidName(it) },
+                        onSave = {
+                            DeviceIdentity.setName(context, it)
+                            editingName = false
+                            version++
+                        },
+                        onCancel = { editingName = false },
+                    )
+                } else {
+                    ListItem(
+                        selected = false,
+                        onClick = { editingName = true },
+                        headlineContent = { Text(stringResource(R.string.settings_tv_name)) },
+                        supportingContent = { Text(stringResource(R.string.settings_tv_name_desc)) },
+                        trailingContent = { Text(tvName) },
+                        modifier = Modifier.focusRequester(first),
+                    )
+                }
+            }
+            item {
+                Spacer(Modifier.height(20.dp))
                 SectionTitle(stringResource(R.string.settings_security))
             }
             item {
@@ -91,7 +126,6 @@ fun SettingsScreen() {
                     title = stringResource(R.string.settings_nsp_pin),
                     description = stringResource(if (pin) R.string.settings_nsp_pin_on else R.string.settings_nsp_pin_off),
                     checked = pin,
-                    modifier = Modifier.focusRequester(first),
                 ) {
                     security.nspPinPairing = !pin
                     version++
@@ -142,8 +176,11 @@ fun SettingsScreen() {
             if (airplay == AirPlaySecurity.PASSWORD) {
                 item {
                     if (editingPassword) {
-                        PasswordEditor(
+                        TextEditor(
+                            hint = stringResource(R.string.settings_password_hint),
                             initial = password,
+                            password = true,
+                            isValid = { it.length >= 4 },
                             onSave = {
                                 security.airPlayPassword = it
                                 editingPassword = false
@@ -186,7 +223,7 @@ fun SettingsScreen() {
                         },
                         headlineContent = { Text(d.name) },
                         supportingContent = {
-                            Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(d.addedAt)) + " · " + d.fingerprint.take(16))
+                            Text(dateFormat.format(Date(d.addedAt)))
                         },
                         trailingContent = { Text(stringResource(R.string.settings_trusted_remove)) },
                     )
@@ -224,7 +261,14 @@ private fun ToggleRow(title: String, description: String, checked: Boolean, modi
 }
 
 @Composable
-private fun PasswordEditor(initial: String, onSave: (String) -> Unit, onCancel: () -> Unit) {
+private fun TextEditor(
+    hint: String,
+    initial: String,
+    password: Boolean,
+    isValid: (String) -> Boolean,
+    onSave: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
     var value by remember { mutableStateOf(initial) }
     val field = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { field.requestFocus() } }
@@ -234,7 +278,7 @@ private fun PasswordEditor(initial: String, onSave: (String) -> Unit, onCancel: 
             .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
             .padding(20.dp),
     ) {
-        Text(stringResource(R.string.settings_password_hint), style = MaterialTheme.typography.bodyMedium)
+        Text(hint, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(12.dp))
         BasicTextField(
             value = value,
@@ -242,8 +286,8 @@ private fun PasswordEditor(initial: String, onSave: (String) -> Unit, onCancel: 
             singleLine = true,
             textStyle = TextStyle(color = Color.White, fontSize = 22.sp),
             cursorBrush = SolidColor(Color.White),
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+            keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else KeyboardType.Text),
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
@@ -252,7 +296,7 @@ private fun PasswordEditor(initial: String, onSave: (String) -> Unit, onCancel: 
         )
         Spacer(Modifier.height(16.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { onSave(value) }, enabled = value.length >= 4) { Text(stringResource(R.string.save)) }
+            Button(onClick = { onSave(value) }, enabled = isValid(value)) { Text(stringResource(R.string.save)) }
             Spacer(Modifier.width(12.dp))
             OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
         }
