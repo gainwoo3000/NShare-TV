@@ -101,6 +101,28 @@ interface SessionSinks {
     fun onSessionEnd()
 }
 
+/** Who may mirror over AirPlay. Read at the start of each connection / advertisement. */
+enum class AirPlayAccessMode { OPEN, SCREEN_PIN, PASSWORD }
+
+/** Access control provided by the app (settings, PIN display, remembered Apple devices). */
+interface AirPlayAccess {
+    val mode: AirPlayAccessMode
+    val password: String
+    /** Shows the 4-digit code an Apple device must type; null hides it. */
+    fun showPin(pin: String?)
+    /** Whether the Ed25519 key of an Apple device that once completed PIN pairing is still trusted. */
+    fun isPairedClient(publicKeyHex: String): Boolean
+    fun rememberClient(publicKeyHex: String, name: String)
+}
+
+object OpenAirPlayAccess : AirPlayAccess {
+    override val mode = AirPlayAccessMode.OPEN
+    override val password = ""
+    override fun showPin(pin: String?) {}
+    override fun isPairedClient(publicKeyHex: String) = false
+    override fun rememberClient(publicKeyHex: String, name: String) {}
+}
+
 interface ReceiverListener {
     /** [disconnect] drops this sender; called when another sender takes over the screen. */
     fun onSessionStart(client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks

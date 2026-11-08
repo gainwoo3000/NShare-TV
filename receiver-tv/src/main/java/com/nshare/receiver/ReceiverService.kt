@@ -13,6 +13,8 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import com.nshare.airplay.AirPlayAccess
+import com.nshare.airplay.AirPlayAccessMode
 import com.nshare.airplay.ClientInfo
 import com.nshare.airplay.ReceiverListener
 import com.nshare.airplay.SessionSinks
@@ -20,6 +22,9 @@ import com.nshare.airplay.server.AirPlayServer
 import com.nshare.airplay.time.ClockSync
 import com.nshare.common.AppLanguage
 import com.nshare.protocol.Caps
+import com.nshare.receiver.security.AirPlaySecurity
+import com.nshare.receiver.security.SecuritySettings
+import com.nshare.receiver.security.TrustedDevices
 import com.nshare.receiver.nsp.NspServer
 import com.nshare.receiver.ui.MainActivity
 
@@ -28,6 +33,10 @@ class ReceiverService : Service() {
     private var server: AirPlayServer? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var nspServer: NspServer? = null
+    private val securityPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        // pw / status flags in the AirPlay TXT records follow the security setting.
+        if (key == "airplay_security" || key == "airplay_password") server?.refreshAdvertisement()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -47,7 +56,8 @@ class ReceiverService : Service() {
                 PlayerHub.requestApproval(this@ReceiverService, client.name ?: client.model ?: client.address, airPlayKey(client))
         }
         startNsp(config)
-        server = AirPlayServer(this, config, listener).also {
+        getSharedPreferences("security", Context.MODE_PRIVATE).registerOnSharedPreferenceChangeListener(securityPrefsListener)
+        server = AirPlayServer(this, config, listener, AirPlayAccessAdapter(this)).also {
             try {
                 it.start()
                 PlayerHub.receiverName = config.name
@@ -74,6 +84,7 @@ class ReceiverService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
+        getSharedPreferences("security", Context.MODE_PRIVATE).unregisterOnSharedPreferenceChangeListener(securityPrefsListener)
         server?.stop()
         server = null
         nspServer?.stop()
@@ -129,5 +140,30 @@ class BootReceiver : BroadcastReceiver() {
                 Log.w("NShare.Boot", "could not start receiver: ${e.message}")
             }
         }
+    }
+}
+
+/** Maps the TV security settings onto the AirPlay receiver's access control. */
+private class AirPlayAccessAdapter(context: Context) : AirPlayAccess {
+    private val settings = SecuritySettings(context)
+    private val trusted = TrustedDevices(context)
+
+    override val mode: AirPlayAccessMode
+        get() = when (settings.airPlaySecurity) {
+            AirPlaySecurity.NONE -> AirPlayAccessMode.OPEN
+            AirPlaySecurity.SCREEN_PIN -> AirPlayAccessMode.SCREEN_PIN
+            // A password that was never set would lock everyone out; stay open until one is saved.
+            AirPlaySecurity.PASSWORD -> if (settings.airPlayPassword.isEmpty()) AirPlayAccessMode.OPEN else AirPlayAccessMode.PASSWORD
+        }
+    override val password: String get() = settings.airPlayPassword
+
+    override fun showPin(pin: String?) = PlayerHub.showAirPlayPin(pin)
+
+    // Apple devices paired with the on-screen PIN share the trusted-devices list (removable in settings).
+    override fun isPairedClient(publicKeyHex: String) = trusted.isTrusted(KEY_PREFIX + publicKeyHex)
+    override fun rememberClient(publicKeyHex: String, name: String) = trusted.trust(KEY_PREFIX + publicKeyHex, name)
+
+    private companion object {
+        const val KEY_PREFIX = "airplay-"
     }
 }

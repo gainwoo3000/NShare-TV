@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.util.Log
+import com.nshare.airplay.AirPlayAccessMode
 import com.nshare.airplay.ReceiverConfig
 import com.nshare.airplay.crypto.Identity
 import com.nshare.airplay.util.Bytes
@@ -14,11 +15,11 @@ internal class Mdns(context: Context) {
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val listeners = ArrayList<NsdManager.RegistrationListener>()
 
-    fun register(config: ReceiverConfig, identity: Identity, port: Int) {
+    fun register(config: ReceiverConfig, identity: Identity, port: Int, mode: AirPlayAccessMode) {
         unregister()
         val raopName = config.deviceId.replace(":", "") + "@" + config.name
-        registerService(config.name, "_airplay._tcp", port, airplayTxt(config, identity))
-        registerService(raopName, "_raop._tcp", port, raopTxt(config, identity))
+        registerService(config.name, "_airplay._tcp", port, airplayTxt(config, identity, mode))
+        registerService(raopName, "_raop._tcp", port, raopTxt(config, identity, mode))
     }
 
     fun unregister() {
@@ -57,10 +58,10 @@ internal class Mdns(context: Context) {
     companion object {
         private const val TAG = "NShare.Mdns"
 
-        fun airplayTxt(config: ReceiverConfig, identity: Identity): List<Pair<String, String>> = listOf(
+        fun airplayTxt(config: ReceiverConfig, identity: Identity, mode: AirPlayAccessMode = AirPlayAccessMode.OPEN): List<Pair<String, String>> = listOf(
             "deviceid" to config.deviceId,
             "features" to config.featuresString,
-            "pw" to "false",
+            "pw" to (mode != AirPlayAccessMode.OPEN).toString(),
             "flags" to "0x4",
             "model" to ReceiverConfig.MODEL,
             "pk" to Bytes.hex(identity.publicKey),
@@ -69,7 +70,8 @@ internal class Mdns(context: Context) {
             "vv" to "2",
         )
 
-        fun raopTxt(config: ReceiverConfig, identity: Identity): List<Pair<String, String>> = listOf(
+        /** Status flags: 0x8 = PIN required, 0x80 = password required (on top of 0x4). */
+        fun raopTxt(config: ReceiverConfig, identity: Identity, mode: AirPlayAccessMode = AirPlayAccessMode.OPEN): List<Pair<String, String>> = listOf(
             "ch" to "2",
             "cn" to "0,1,2,3",
             "da" to "true",
@@ -79,8 +81,12 @@ internal class Mdns(context: Context) {
             "am" to ReceiverConfig.MODEL,
             "md" to "0,1,2",
             "rhd" to "5.6.0.0",
-            "pw" to "false",
-            "sf" to "0x4",
+            "pw" to (mode != AirPlayAccessMode.OPEN).toString(),
+            "sf" to when (mode) {
+                AirPlayAccessMode.OPEN -> "0x4"
+                AirPlayAccessMode.SCREEN_PIN -> "0x8c"
+                AirPlayAccessMode.PASSWORD -> "0x84"
+            },
             "sr" to "44100",
             "ss" to "16",
             "sv" to "false",

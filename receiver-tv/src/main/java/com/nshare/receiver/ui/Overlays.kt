@@ -68,7 +68,7 @@ fun PinOverlay(title: String, body: String, pin: String) {
             Text(body, style = MaterialTheme.typography.bodyLarge, color = Color(0xFFC4C6D0), textAlign = TextAlign.Center)
             Spacer(Modifier.height(28.dp))
             Text(
-                pin.chunked(3).joinToString("  "),
+                if (pin.length == 6) pin.chunked(3).joinToString("  ") else pin,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 72.sp,

@@ -2,6 +2,8 @@ package com.nshare.airplay.server
 
 import android.content.Context
 import android.util.Log
+import com.nshare.airplay.AirPlayAccess
+import com.nshare.airplay.OpenAirPlayAccess
 import com.nshare.airplay.ReceiverConfig
 import com.nshare.airplay.ReceiverListener
 import com.nshare.airplay.crypto.Identity
@@ -18,6 +20,7 @@ class AirPlayServer(
     context: Context,
     private val config: ReceiverConfig,
     internal val listener: ReceiverListener,
+    internal val access: AirPlayAccess = OpenAirPlayAccess,
 ) {
     private val identity = Identity(config.identitySecret)
     private val mdns = Mdns(context.applicationContext)
@@ -41,7 +44,7 @@ class AirPlayServer(
             isDaemon = true
             start()
         }
-        mdns.register(config, identity, port)
+        mdns.register(config, identity, port, access.mode)
         watchdog = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "nshare-rtsp-watchdog").apply { isDaemon = true }
         }.also { it.scheduleWithFixedDelay(::checkIdleSessions, 2, 2, java.util.concurrent.TimeUnit.SECONDS) }
@@ -75,6 +78,11 @@ class AirPlayServer(
                 s.close()
             }
         }
+    }
+
+    /** Re-advertises after the access mode changed (pw / status flags in the TXT records). */
+    fun refreshAdvertisement() {
+        if (running) mdns.register(config, identity, port, access.mode)
     }
 
     /** Drops the current sender, if any. */

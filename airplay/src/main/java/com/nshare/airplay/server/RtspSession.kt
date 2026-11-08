@@ -1,13 +1,16 @@
 package com.nshare.airplay.server
 
 import android.util.Log
+import com.nshare.airplay.AirPlayAccessMode
 import com.nshare.airplay.AudioFormat
 import com.nshare.airplay.ClientInfo
 import com.nshare.airplay.ReceiverConfig
 import com.nshare.airplay.SessionSinks
+import com.nshare.airplay.crypto.DigestAuth
 import com.nshare.airplay.crypto.FairPlay
 import com.nshare.airplay.crypto.Identity
 import com.nshare.airplay.crypto.PairVerify
+import com.nshare.airplay.crypto.SrpServer
 import com.nshare.airplay.plist.BinaryPlist
 import com.nshare.airplay.plist.data
 import com.nshare.airplay.plist.list
@@ -84,6 +87,7 @@ internal class RtspSession(
     }
 
     fun close() {
+        if (pin != null && pinPairedKey == null) server.access.showPin(null)
         try { socket.close() } catch (_: Exception) {}
         stopStreams()
     }
@@ -94,6 +98,8 @@ internal class RtspSession(
             "GET" -> if (req.path.startsWith("/info")) handleInfo(req, res) else res.status(404, "Not Found")
             "POST" -> when (req.path) {
                 "/pair-setup" -> handlePairSetup(req, res)
+                "/pair-pin-start" -> handlePairPinStart(res)
+                "/pair-setup-pin" -> handlePairSetupPin(req, res)
                 "/pair-verify" -> handlePairVerify(req, res)
                 "/fp-setup" -> handleFpSetup(req, res)
                 "/feedback", "/audioMode", "/command" -> Unit
@@ -126,12 +132,12 @@ internal class RtspSession(
         }
         val info = LinkedHashMap<String, Any?>()
         if (qualifier == "txtAirPlay") {
-            info["txtAirPlay"] = Mdns.txtRecordBytes(Mdns.airplayTxt(config, identity))
+            info["txtAirPlay"] = Mdns.txtRecordBytes(Mdns.airplayTxt(config, identity, server.access.mode))
             res.body(PLIST, BinaryPlist.encode(info))
             return
         }
         if (qualifier == "txtRAOP") {
-            info["txtRAOP"] = Mdns.txtRecordBytes(Mdns.raopTxt(config, identity))
+            info["txtRAOP"] = Mdns.txtRecordBytes(Mdns.raopTxt(config, identity, server.access.mode))
             res.body(PLIST, BinaryPlist.encode(info))
             return
         }
@@ -195,9 +201,20 @@ internal class RtspSession(
                     res.status(400, "Bad Request")
                     return
                 }
+                val clientEd = b.copyOfRange(36, 68)
+                if (server.access.mode == AirPlayAccessMode.SCREEN_PIN) {
+                    // Only Apple devices that completed PIN pairing (now or earlier) may continue.
+                    val hex = Bytes.hex(clientEd)
+                    pinAuthorized = pinPairedKey?.contentEquals(clientEd) == true || server.access.isPairedClient(hex)
+                    if (!pinAuthorized) {
+                        Log.i(TAG, "pair-verify from an unpaired device in PIN mode")
+                        res.status(470, "Connection Authorization Required")
+                        return
+                    }
+                }
                 val pv = PairVerify(identity)
                 pairVerify = pv
-                res.body(OCTET, pv.handshake(b.copyOfRange(4, 36), b.copyOfRange(36, 68)))
+                res.body(OCTET, pv.handshake(b.copyOfRange(4, 36), clientEd))
             }
             0 -> {
                 val pv = pairVerify
@@ -212,6 +229,107 @@ internal class RtspSession(
                     return
                 }
                 res.body(OCTET, ByteArray(0))
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ access control (PIN / password)
+
+    private var srp: SrpServer? = null
+    private var pin: String? = null
+    /** Ed25519 key of the device that completed pair-setup-pin on this connection. */
+    private var pinPairedKey: ByteArray? = null
+    private var pinAuthorized = false
+    private var digestNonce: String? = null
+    private var passwordOk = false
+
+    private fun handlePairPinStart(res: RtspResponse) {
+        val code = "%04d".format(java.security.SecureRandom().nextInt(10_000))
+        pin = code
+        server.access.showPin(code)
+        Log.i(TAG, "pair-pin-start: showing a PIN on screen")
+    }
+
+    /** SRP-6a pairing in three steps (method/user → salt+B, A+M1 → M2, encrypted Ed25519 keys). */
+    private fun handlePairSetupPin(req: RtspRequest, res: RtspResponse) {
+        @Suppress("UNCHECKED_CAST")
+        val body = (if (BinaryPlist.isBinaryPlist(req.body)) BinaryPlist.decode(req.body) else null) as? Map<String, Any?>
+        val code = pin
+        if (body == null || code == null) {
+            res.status(470, "Connection Authorization Required")
+            return
+        }
+        when {
+            body.string("user") != null -> {
+                val s = SrpServer(body.string("user")!!, code)
+                srp = s
+                res.body(PLIST, BinaryPlist.encode(linkedMapOf("pk" to s.publicKey, "salt" to s.salt)))
+            }
+            body.data("proof") != null && body.data("pk") != null -> {
+                val proof = srp?.verify(body.data("pk")!!, body.data("proof")!!)
+                if (proof == null) {
+                    Log.i(TAG, "pair-setup-pin: wrong PIN")
+                    res.status(470, "Connection Authorization Required")
+                    return
+                }
+                res.body(PLIST, BinaryPlist.encode(mapOf("proof" to proof)))
+            }
+            body.data("epk") != null && body.data("authTag") != null -> {
+                val key = srp?.sessionKey ?: run {
+                    res.status(470, "Connection Authorization Required")
+                    return
+                }
+                val aesKey = Bytes.sha512("Pair-Setup-AES-Key".toByteArray(), key).copyOf(16)
+                val iv = Bytes.sha512("Pair-Setup-AES-IV".toByteArray(), key).copyOf(16)
+                iv[15]++
+                val clientKey = try {
+                    gcm(javax.crypto.Cipher.DECRYPT_MODE, aesKey, iv, body.data("epk")!! + body.data("authTag")!!)
+                } catch (e: Exception) {
+                    Log.w(TAG, "pair-setup-pin: client key did not authenticate")
+                    res.status(470, "Connection Authorization Required")
+                    return
+                }
+                iv[15]++ // the reply uses the next nonce
+                val sealed = gcm(javax.crypto.Cipher.ENCRYPT_MODE, aesKey, iv, identity.publicKey)
+                pinPairedKey = clientKey
+                srp = null
+                server.access.showPin(null)
+                Log.i(TAG, "pair-setup-pin: paired")
+                res.body(PLIST, BinaryPlist.encode(linkedMapOf("epk" to sealed.copyOf(32), "authTag" to sealed.copyOfRange(32, 48))))
+            }
+            else -> res.status(400, "Bad Request")
+        }
+    }
+
+    private fun gcm(mode: Int, key: ByteArray, iv: ByteArray, input: ByteArray): ByteArray =
+        javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").run {
+            init(mode, javax.crypto.spec.SecretKeySpec(key, "AES"), javax.crypto.spec.GCMParameterSpec(128, iv))
+            doFinal(input)
+        }
+
+    /** SETUP gate: PIN mode needs a paired device; password mode needs RTSP Digest authentication. */
+    private fun checkAccess(req: RtspRequest, res: RtspResponse): Boolean {
+        when (server.access.mode) {
+            AirPlayAccessMode.OPEN -> return true
+            AirPlayAccessMode.SCREEN_PIN -> {
+                if (pinAuthorized) return true
+                res.status(470, "Connection Authorization Required")
+                return false
+            }
+            AirPlayAccessMode.PASSWORD -> {
+                if (passwordOk) return true
+                val auth = req.header("Authorization")
+                val password = server.access.password
+                if (auth != null && password.isNotEmpty() && DigestAuth.verify(req.method, auth, password, digestNonce)) {
+                    passwordOk = true
+                    return true
+                }
+                if (auth != null) Log.i(TAG, "AirPlay password rejected")
+                val nonce = DigestAuth.newNonce()
+                digestNonce = nonce
+                res.status(401, "Unauthorized")
+                res.header("WWW-Authenticate", DigestAuth.challenge(nonce))
+                return false
             }
         }
     }
@@ -233,6 +351,7 @@ internal class RtspSession(
     // ------------------------------------------------------------------ streaming
 
     private fun handleSetup(req: RtspRequest, res: RtspResponse) {
+        if (!checkAccess(req, res)) return
         @Suppress("UNCHECKED_CAST")
         val body = (if (BinaryPlist.isBinaryPlist(req.body)) BinaryPlist.decode(req.body) else null)
             as? Map<String, Any?> ?: emptyMap()
@@ -313,6 +432,8 @@ internal class RtspSession(
         val timingPort = body.long("timingPort")?.toInt() ?: 0
         ntp = NtpClient(socket.inetAddress, timingPort, clock).also { it.start() }
 
+        // Remember Apple devices that just completed PIN pairing so they connect directly next time.
+        pinPairedKey?.let { server.access.rememberClient(Bytes.hex(it), info.name ?: info.model ?: remoteAddress) }
         server.onSessionActive(this)
         val gen = ++generation
         // A later SETUP on this same connection must not be torn down by its predecessor's callback.
