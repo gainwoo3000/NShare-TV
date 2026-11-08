@@ -265,7 +265,8 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             }
             abs(errorNs) > RESAMPLE_DEADBAND_NS -> {
                 // Positive error = behind → shorten the chunk; negative = ahead → stretch it.
-                val adjust = (errorNs / frameNs).toInt().coerceIn(-MAX_ADJUST_FRAMES, MAX_ADJUST_FRAMES)
+                val maxAdjust = maxAdjustFrames(frames)
+                val adjust = (errorNs / frameNs).toInt().coerceIn(-maxAdjust, maxAdjust)
                 needsAlignment = false
                 write(resample(pcm, frames, frames - adjust))
             }
@@ -431,8 +432,12 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         private const val DROP_THRESHOLD_NS = 80_000_000L
         private const val SILENCE_THRESHOLD_NS = 80_000_000L
         private const val RESAMPLE_DEADBAND_NS = 2_000_000L
-        /** 3 frames per 480-frame chunk ≈ 0.6 % rate change ≈ 6 ms/s correction. */
-        private const val MAX_ADJUST_FRAMES = 3
+        /**
+         * Resampling may stretch or shrink a chunk by ~0.6 % (at least 3 frames): ≈ 6 ms/s of correction for
+         * both AirPlay AAC-ELD (480 frames) and NShare AAC-LC (1024 frames), faster than the timeline's 5 ms/s
+         * latency decay so audio can always follow it without dropping sound.
+         */
+        fun maxAdjustFrames(frames: Int): Int = maxOf(3, frames * 6 / 1000)
         private const val TIMESTAMP_REFRESH_NS = 100_000_000L
         private const val MAX_PENDING_INPUTS = 16
     }
