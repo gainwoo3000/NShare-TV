@@ -17,6 +17,7 @@ class MirrorPlayer(
     mode: LatencyMode,
     avOffsetMs: Int,
     private val events: Events,
+    requestKeyFrame: (() -> Unit)? = null,
 ) : SessionSinks {
 
     interface Events {
@@ -27,7 +28,9 @@ class MirrorPlayer(
 
     val timeline = Timeline(clock, mode, avOffsetMs)
     val stats = Stats()
-    private val videoRenderer = VideoRenderer(timeline, stats) { w, h -> events.onVideoSize(this, w, h) }
+    private val videoRenderer = VideoRenderer(
+        timeline, stats, { w, h -> events.onVideoSize(this, w, h) }, requestKeyFrame,
+    )
     private val audioRenderer = AudioRenderer(timeline, stats)
     @Volatile private var ended = false
 

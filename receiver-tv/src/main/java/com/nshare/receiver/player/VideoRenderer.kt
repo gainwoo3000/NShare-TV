@@ -30,6 +30,8 @@ class VideoRenderer(
     private val timeline: Timeline,
     private val stats: Stats,
     private val onVideoSize: (width: Int, height: Int) -> Unit,
+    /** Asks the sender for a fresh key frame (NShare); null when the protocol can't (AirPlay). */
+    private val requestKeyFrame: (() -> Unit)? = null,
 ) {
     private val thread = HandlerThread("nshare-video", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
@@ -51,6 +53,9 @@ class VideoRenderer(
     /** Frames since the last key frame, replayed after a decoder re-creation. */
     private val gop = ArrayList<VideoFrame>()
     private var gopBytes = 0L
+    /** The GOP outgrew [MAX_GOP_BYTES]; replaying the partial GOP would only show garbage. */
+    private var gopTruncated = false
+    private var lastKeyFrameRequestNs = 0L
     /** Frames queued with pts <= this are decoded but not shown (replay catch-up). */
     private var catchUpUntilPtsUs = Long.MIN_VALUE
 
@@ -85,12 +90,18 @@ class VideoRenderer(
         if (frame.keyFrame) {
             gop.clear()
             gopBytes = 0
+            gopTruncated = false
             waitingForKeyFrame = false
         }
-        if (waitingForKeyFrame) return@post
+        if (waitingForKeyFrame) {
+            askForKeyFrame("waiting for a key frame")
+            return@post
+        }
         if (gopBytes < MAX_GOP_BYTES) {
             gop += frame
             gopBytes += frame.data.size
+        } else {
+            gopTruncated = true
         }
         queue.addLast(frame)
         feed()
@@ -134,7 +145,8 @@ class VideoRenderer(
         currentOutput = output
         lastPtsUs = Long.MIN_VALUE
         queue.clear()
-        if (replayGop && gop.isNotEmpty()) {
+        if (replayGop) askForKeyFrame("decoder re-created")
+        if (replayGop && gop.isNotEmpty() && !gopTruncated) {
             stats.videoDecoderResets.incrementAndGet()
             queue.addAll(gop)
             catchUpUntilPtsUs = gop.last().remoteNs / 1000
@@ -142,6 +154,15 @@ class VideoRenderer(
         } else {
             waitingForKeyFrame = true
         }
+    }
+
+    private fun askForKeyFrame(reason: String) {
+        val request = requestKeyFrame ?: return
+        val now = System.nanoTime()
+        if (now - lastKeyFrameRequestNs < KEY_FRAME_REQUEST_INTERVAL_NS) return
+        lastKeyFrameRequestNs = now
+        Log.i(TAG, "requesting key frame: $reason")
+        request()
     }
 
     private fun releaseCodec() {
@@ -181,6 +202,7 @@ class VideoRenderer(
             c.setOutputSurface(target)
             currentOutput = target
             Log.i(TAG, "output surface switched (${if (target === displaySurface) "display" else "offscreen"})")
+            askForKeyFrame("output surface changed")
         } catch (e: Exception) {
             Log.w(TAG, "setOutputSurface failed, recreating decoder: ${e.message}")
             recreateCodec(replayGop = true)
@@ -365,6 +387,7 @@ class VideoRenderer(
     companion object {
         private const val TAG = "NShare.Video"
         private const val MAX_GOP_BYTES = 48L * 1024 * 1024
+        private const val KEY_FRAME_REQUEST_INTERVAL_NS = 1_000_000_000L
         private const val LATE_THRESHOLD_NS = 8_000_000L
 
         fun splitAnnexB(data: ByteArray): List<ByteArray> {

@@ -67,9 +67,15 @@ object PlayerHub {
     }
 
     @Synchronized
-    fun startSession(context: Context, client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks {
+    fun startSession(
+        context: Context,
+        client: ClientInfo,
+        clock: ClockSync,
+        requestKeyFrame: (() -> Unit)? = null,
+        disconnect: () -> Unit,
+    ): SessionSinks {
         val settings = Settings(context)
-        val p = MirrorPlayer(client, clock, settings.latencyMode, settings.avOffsetMs, events)
+        val p = MirrorPlayer(client, clock, settings.latencyMode, settings.avOffsetMs, events, requestKeyFrame)
         (wifiLock ?: WifiLatencyLock(context, "nshare-receiver").also { wifiLock = it }).acquire()
         val previousDisconnect = disconnectCurrent
         disconnectCurrent = disconnect

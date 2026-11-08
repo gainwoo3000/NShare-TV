@@ -40,7 +40,7 @@ class ReceiverService : Service() {
             }
         val listener = object : ReceiverListener {
             override fun onSessionStart(client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks =
-                PlayerHub.startSession(this@ReceiverService, client, clock, disconnect)
+                PlayerHub.startSession(this@ReceiverService, client, clock, disconnect = disconnect)
         }
         startNsp(config)
         server = AirPlayServer(this, config, listener).also {

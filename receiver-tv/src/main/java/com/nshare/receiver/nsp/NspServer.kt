@@ -110,6 +110,7 @@ class NspServer(private val context: Context, private val caps: Caps) {
 
     private inner class Session(private val socket: Socket) {
         private var ntp: NtpClient? = null
+        private var controlExecutor: java.util.concurrent.ExecutorService? = null
         private var sinks: SessionSinks? = null
         private var codec = VideoCodec.H264
         private var parameterSets = ByteArray(0)
@@ -131,7 +132,13 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 val clock = ClockSync()
                 ntp = NtpClient(socket.inetAddress, hello.timingPort, clock).also { it.start() }
                 val client = ClientInfo(address, hello.deviceName, hello.model, null)
-                val s = PlayerHub.startSession(context, client, clock) { close() }
+                // Control messages go out on their own thread so the video thread never blocks on the socket.
+                val control = java.util.concurrent.Executors.newSingleThreadExecutor()
+                controlExecutor = control
+                val requestKeyFrame: () -> Unit = {
+                    control.execute { runCatching { writer.write(Nsp.Type.KEYFRAME_REQUEST) } }
+                }
+                val s = PlayerHub.startSession(context, client, clock, requestKeyFrame) { close() }
                 sinks = s
 
                 while (!socket.isClosed) {
@@ -165,6 +172,7 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 Log.i(TAG, "session $address ended: ${e.javaClass.simpleName} ${e.message}")
             } finally {
                 close()
+                controlExecutor?.shutdownNow()
                 ntp?.stop()
                 sinks?.onSessionEnd()
                 sinks = null
