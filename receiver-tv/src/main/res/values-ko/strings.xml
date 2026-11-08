@@ -33,4 +33,43 @@
     <string name="stats_audio2">      버림 %1$d (+무음 %4$d) · 무음 삽입 %2$d ms · 언더런 %3$d</string>
     <string name="stats_offset">보정  %1$s · 시계 %2$s</string>
     <string name="clock_arrival">도착시간 추정</string>
+
+    <!-- Security / v2 -->
+    <string name="button_settings">설정</string>
+    <string name="settings_title">설정</string>
+    <string name="settings_security">보안</string>
+    <string name="settings_nsp_pin">NShare PIN 페어링</string>
+    <string name="settings_nsp_pin_on">새 기기는 처음 연결할 때 TV에 표시된 PIN을 입력해야 합니다.</string>
+    <string name="settings_nsp_pin_off">전송은 항상 암호화됩니다. PIN 없이 쓰면 처음 연결한 기기를 자동으로 신뢰하므로, 그 첫 연결의 사칭은 막지 못합니다.</string>
+    <string name="settings_approval">기기 전환 시 승인</string>
+    <string name="settings_approval_desc">누군가 미러링 중일 때 다른 기기가 연결하면 TV에서 허용 여부를 묻습니다.</string>
+    <string name="settings_airplay">AirPlay 보안</string>
+    <string name="airplay_none">없음</string>
+    <string name="airplay_pin">화면 PIN</string>
+    <string name="airplay_password">비밀번호</string>
+    <string name="airplay_none_desc">iPhone, iPad, Mac이 코드 없이 연결합니다.</string>
+    <string name="airplay_pin_desc">Apple 기기에서 TV에 표시된 4자리 코드를 입력합니다.</string>
+    <string name="airplay_password_desc">Apple 기기에서 설정한 비밀번호를 입력합니다.</string>
+    <string name="settings_airplay_password">AirPlay 비밀번호</string>
+    <string name="settings_password_unset">설정 안 됨</string>
+    <string name="settings_password_hint">비밀번호 입력 (4자 이상)</string>
+    <string name="settings_trusted">신뢰 기기</string>
+    <string name="settings_trusted_empty">아직 신뢰 기기가 없습니다.</string>
+    <string name="settings_trusted_remove">선택하면 삭제</string>
+    <string name="settings_trusted_clear">신뢰 기기 모두 삭제</string>
+    <string name="settings_applies_next">변경 사항은 다음 연결부터 적용됩니다.</string>
+    <string name="on">켜짐</string>
+    <string name="off">꺼짐</string>
+    <string name="save">저장</string>
+    <string name="cancel">취소</string>
+    <string name="pin_title">%1$s 페어링</string>
+    <string name="pin_body">%1$s에서 이 PIN을 입력하세요</string>
+    <string name="approval_title">%1$s이(가) 화면을 공유하려고 합니다</string>
+    <string name="approval_body">지금 화면이 바뀝니다. %1$d초 후 자동으로 거부합니다.</string>
+    <string name="approval_allow">허용</string>
+    <string name="approval_deny">거부</string>
+    <string name="reconnecting">연결이 끊겼습니다 · 다시 연결하는 중…</string>
+    <string name="notice_old_sender">이전 버전의 NShare 앱이 연결을 시도했습니다. 휴대폰의 NShare 앱을 업데이트하세요.</string>
+    <string name="airplay_pin_title">AirPlay 코드</string>
+    <string name="airplay_pin_body">iPhone, iPad 또는 Mac에서 이 코드를 입력하세요</string>
 </resources>

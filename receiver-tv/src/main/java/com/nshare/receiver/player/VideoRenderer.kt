@@ -31,7 +31,7 @@ class VideoRenderer(
     private val stats: Stats,
     private val onVideoSize: (width: Int, height: Int) -> Unit,
     /** Asks the sender for a fresh key frame (NShare); null when the protocol can't (AirPlay). */
-    private val requestKeyFrame: (() -> Unit)? = null,
+    @Volatile var requestKeyFrame: (() -> Unit)? = null,
 ) {
     private val thread = HandlerThread("nshare-video", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)

@@ -6,27 +6,40 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Surface
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.nshare.airplay.ClientInfo
 import com.nshare.airplay.SessionSinks
 import com.nshare.airplay.time.ClockSync
 import com.nshare.common.WifiLatencyLock
+import com.nshare.protocol.Nsp
 import com.nshare.receiver.player.MirrorPlayer
+import com.nshare.receiver.security.SecuritySettings
 import com.nshare.receiver.ui.MainActivity
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
- * Glue between the receiver service (sessions) and the activity (surface + UI).
- * All listener callbacks are delivered on the main thread.
+ * Glue between the receiver services (sessions) and the activity (surface + UI).
+ * Listener callbacks are delivered on the main thread; overlay state is Compose-observable.
  */
 object PlayerHub {
     sealed interface State {
         data object Idle : State
-        data class Mirroring(val clientName: String, val videoActive: Boolean) : State
+        data class Mirroring(val clientName: String, val videoActive: Boolean, val reconnecting: Boolean = false) : State
     }
 
     interface Listener {
         fun onStateChanged(state: State)
         fun onVideoSize(width: Int, height: Int)
     }
+
+    /** PIN the TV shows while an NShare sender pairs. */
+    class PinPrompt(val pin: String, val deviceName: String)
+
+    /** A second sender wants the screen; [respond] answers it (true = allow). */
+    class ApprovalRequest(val deviceName: String, val deadlineMs: Long, val respond: (Boolean) -> Unit)
 
     private val main = Handler(Looper.getMainLooper())
     private val listeners = LinkedHashSet<Listener>()
@@ -41,11 +54,25 @@ object PlayerHub {
     var videoHeight = 0
         private set
 
+    var pinPrompt by mutableStateOf<PinPrompt?>(null)
+        private set
+    var approval by mutableStateOf<ApprovalRequest?>(null)
+        private set
+    /** 4-digit code an Apple device must type (AirPlay "PIN on screen" security). */
+    var airPlayPin by mutableStateOf<String?>(null)
+        private set
+    /** Short message for the user (e.g. an outdated sender app tried to connect). */
+    var notice by mutableStateOf<String?>(null)
+        private set
+
     /** Receiver name / address for the idle screen, set by the service. */
     @Volatile var receiverName: String = ""
     @Volatile var receiverPort: Int = 0
     private var disconnectCurrent: (() -> Unit)? = null
     private var wifiLock: WifiLatencyLock? = null
+    /** Identity of the current sender (NShare certificate fingerprint), used to resume after a drop. */
+    private var currentKey: String? = null
+    private var dropTimeout: Runnable? = null
 
     fun addListener(l: Listener) {
         listeners += l
@@ -64,6 +91,8 @@ object PlayerHub {
 
     fun disconnect() {
         disconnectCurrent?.invoke()
+        // A dropped session waiting for its sender has no connection left to close.
+        if (dropTimeout != null) endDropped()
     }
 
     @Synchronized
@@ -72,13 +101,16 @@ object PlayerHub {
         client: ClientInfo,
         clock: ClockSync,
         requestKeyFrame: (() -> Unit)? = null,
+        key: String? = null,
         disconnect: () -> Unit,
     ): SessionSinks {
         val settings = Settings(context)
         val p = MirrorPlayer(client, clock, settings.latencyMode, settings.avOffsetMs, events, requestKeyFrame)
         (wifiLock ?: WifiLatencyLock(context, "nshare-receiver").also { wifiLock = it }).acquire()
+        cancelDropTimeout()
         val previousDisconnect = disconnectCurrent
         disconnectCurrent = disconnect
+        currentKey = key
         player?.onSessionEnd()
         // The newest sender wins, whichever protocol either of them uses.
         if (previousDisconnect != null) Thread { previousDisconnect() }.start()
@@ -89,6 +121,110 @@ object PlayerHub {
         post { setState(State.Mirroring(name, videoActive = false)) }
         bringToFront(context)
         return p
+    }
+
+    /**
+     * The same NShare sender reconnected while its dropped session was still on screen: keep the
+     * player (decoder, timeline, clock) and continue where it stopped.
+     */
+    @Synchronized
+    fun resumeSession(key: String, requestKeyFrame: (() -> Unit)?, disconnect: () -> Unit): MirrorPlayer? {
+        val p = player ?: return null
+        if (dropTimeout == null || key != currentKey) return null
+        cancelDropTimeout()
+        disconnectCurrent = disconnect
+        p.setKeyFrameRequester(requestKeyFrame)
+        Log.i(TAG, "session resumed: ${p.client.name}")
+        post {
+            val s = state
+            if (s is State.Mirroring) setState(s.copy(reconnecting = false))
+        }
+        return p
+    }
+
+    /**
+     * The connection to [p] broke without a goodbye. Keep its last frame on screen with a
+     * "reconnecting" overlay for a few seconds in case the sender comes back.
+     */
+    @Synchronized
+    fun sessionDropped(p: MirrorPlayer) {
+        if (p !== player) {
+            p.onSessionEnd()
+            return
+        }
+        disconnectCurrent = null
+        p.setKeyFrameRequester(null)
+        val timeout = Runnable { endDropped() }
+        dropTimeout = timeout
+        main.postDelayed(timeout, RECONNECT_GRACE_MS)
+        post {
+            val s = state
+            if (s is State.Mirroring) setState(s.copy(reconnecting = true))
+        }
+    }
+
+    @Synchronized
+    private fun endDropped() {
+        cancelDropTimeout()
+        player?.onSessionEnd()
+    }
+
+    private fun cancelDropTimeout() {
+        dropTimeout?.let { main.removeCallbacks(it) }
+        dropTimeout = null
+    }
+
+    // ------------------------------------------------------------------ security prompts
+
+    fun showPin(pin: String, deviceName: String) {
+        pinPrompt = PinPrompt(pin, deviceName)
+        bringToFrontFromBackground()
+    }
+
+    fun hidePin() {
+        pinPrompt = null
+    }
+
+    fun showAirPlayPin(pin: String?) {
+        airPlayPin = pin
+        if (pin != null) bringToFrontFromBackground()
+    }
+
+    /**
+     * Asks the TV user whether [deviceName] may take over the screen. Only asked when the setting is
+     * on and someone else is mirroring; blocks the calling session thread for up to 10 s.
+     */
+    fun needsApproval(context: Context, key: String): Boolean =
+        SecuritySettings(context).approveTakeover && player != null && key != currentKey
+
+    fun requestApproval(context: Context, deviceName: String, key: String): Boolean {
+        if (!needsApproval(context, key)) return true
+        val latch = CountDownLatch(1)
+        var allowed = false
+        val req = ApprovalRequest(deviceName, System.currentTimeMillis() + Nsp.APPROVAL_TIMEOUT_MS) { ok ->
+            allowed = ok
+            latch.countDown()
+        }
+        approval = req
+        val answered = latch.await(Nsp.APPROVAL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (approval === req) approval = null
+        Log.i(TAG, "takeover by $deviceName ${if (answered && allowed) "allowed" else "refused"}")
+        return answered && allowed
+    }
+
+    fun showNotice(text: String) {
+        notice = text
+        main.postDelayed({ if (notice == text) notice = null }, 6_000)
+    }
+
+    private var appContext: Context? = null
+
+    fun attach(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    private fun bringToFrontFromBackground() {
+        appContext?.let { bringToFront(it) }
     }
 
     private fun bringToFront(context: Context) {
@@ -119,6 +255,8 @@ object PlayerHub {
         override fun onEnded(player: MirrorPlayer) = post {
             if (player !== this@PlayerHub.player) return@post
             this@PlayerHub.player = null
+            currentKey = null
+            cancelDropTimeout()
             wifiLock?.release()
             videoWidth = 0
             videoHeight = 0
@@ -136,4 +274,5 @@ object PlayerHub {
     }
 
     private const val TAG = "NShare.Hub"
+    private const val RECONNECT_GRACE_MS = 10_000L
 }

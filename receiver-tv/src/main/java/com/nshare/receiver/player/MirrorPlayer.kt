@@ -57,6 +57,11 @@ class MirrorPlayer(
 
     fun setSurface(surface: android.view.Surface?) = videoRenderer.setSurface(surface)
 
+    /** A reconnected NShare session brings its own control channel. */
+    fun setKeyFrameRequester(request: (() -> Unit)?) {
+        videoRenderer.requestKeyFrame = request
+    }
+
     override val video: VideoSink = object : VideoSink {
         override fun onVideoConfig(config: VideoConfig) {
             videoRenderer.configure(config)

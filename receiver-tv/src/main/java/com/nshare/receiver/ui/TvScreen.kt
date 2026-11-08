@@ -55,6 +55,7 @@ import androidx.tv.material3.darkColorScheme
 import com.nshare.ads.BannerAd
 import com.nshare.ads.BannerSize
 import com.nshare.common.AppLanguage
+import com.nshare.receiver.PlayerHub
 import com.nshare.receiver.R
 
 private val Brand = Color(0xFF1A73E8)
@@ -91,9 +92,11 @@ class TvUiState(
     val stats: String?,
     val hint: String?,
     val language: AppLanguage,
+    val reconnecting: Boolean = false,
+    val settingsOpen: Boolean = false,
 )
 
-class TvActions(val onDiagnostics: () -> Unit, val onLanguage: () -> Unit)
+class TvActions(val onDiagnostics: () -> Unit, val onLanguage: () -> Unit, val onSettings: () -> Unit)
 
 /** Overscan-safe margins recommended for TV layouts (5% of 960x540dp). */
 private val SafeHorizontal = 48.dp
@@ -109,14 +112,28 @@ fun TvScreen(state: TvUiState, adUnitId: String, surfaceCallback: SurfaceHolder.
                     modifier = Modifier.aspectRatio(state.videoAspect.coerceIn(0.2f, 5f)),
                 )
             }
-            if (!state.videoActive) WaitingForVideo(state.clientName)
+            if (!state.videoActive && !state.reconnecting) WaitingForVideo(state.clientName)
+            if (state.reconnecting) ReconnectingBanner()
         }
 
         AnimatedVisibility(visible = !state.mirroring, enter = fadeIn(), exit = fadeOut()) {
             IdleScreen(state, adUnitId, actions)
         }
 
-        state.stats?.let { StatsPanel(it, belowTopBar = !state.mirroring) }
+        if (state.settingsOpen) SettingsScreen()
+
+        state.stats?.let { if (!state.settingsOpen) StatsPanel(it, belowTopBar = !state.mirroring) }
+
+        PlayerHub.pinPrompt?.let {
+            PinOverlay(stringResource(R.string.pin_title, it.deviceName), stringResource(R.string.pin_body, it.deviceName), it.pin)
+        }
+        PlayerHub.airPlayPin?.let {
+            PinOverlay(stringResource(R.string.airplay_pin_title), stringResource(R.string.airplay_pin_body), it)
+        }
+        PlayerHub.approval?.let { ApprovalDialog(it) }
+        PlayerHub.notice?.let { notice ->
+            Box(Modifier.fillMaxSize().padding(bottom = 120.dp), contentAlignment = Alignment.BottomCenter) { Pill(notice) }
+        }
 
         state.hint?.let { hint ->
             Box(Modifier.fillMaxSize().padding(bottom = 56.dp), contentAlignment = Alignment.BottomCenter) {
@@ -149,6 +166,16 @@ private fun IdleScreen(state: TvUiState, adUnitId: String, actions: TvActions) {
                 Text("NShare", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
                 NetworkChip(state.address, state.port)
+                Spacer(Modifier.width(12.dp))
+                OutlinedButton(onClick = actions.onSettings) {
+                    Image(
+                        painterResource(R.drawable.ic_settings), null,
+                        colorFilter = ColorFilter.tint(LocalContentColor.current),
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.button_settings))
+                }
                 Spacer(Modifier.width(12.dp))
                 OutlinedButton(onClick = actions.onDiagnostics, modifier = Modifier.focusRequester(firstButton)) {
                     Text(stringResource(R.string.button_diagnostics))

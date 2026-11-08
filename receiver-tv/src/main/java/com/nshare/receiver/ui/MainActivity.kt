@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
     private var hint by mutableStateOf<String?>(null)
     private var address by mutableStateOf<String?>(null)
     private var receiverName by mutableStateOf("")
+    private var settingsOpen by mutableStateOf(false)
     private var lastBackPress = 0L
 
     private val statsTicker = object : Runnable {
@@ -77,10 +78,12 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
                         stats = statsText,
                         hint = hint,
                         language = AppLanguage.current(this),
+                        reconnecting = (s as? PlayerHub.State.Mirroring)?.reconnecting ?: false,
+                        settingsOpen = settingsOpen && s !is PlayerHub.State.Mirroring,
                     ),
                     AdKeys.BANNER_AD_UNIT,
                     surfaceCallback,
-                    TvActions(onDiagnostics = ::toggleStats, onLanguage = ::cycleLanguage),
+                    TvActions(onDiagnostics = ::toggleStats, onLanguage = ::cycleLanguage, onSettings = { settingsOpen = true }),
                 )
             }
         }
@@ -128,6 +131,21 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
 
     /** While mirroring the remote drives diagnostics; on the idle screen keys go to the focused buttons. */
     private fun handleKey(keyCode: Int): Boolean {
+        // Dialogs and the settings screen take the remote; BACK dismisses them.
+        PlayerHub.approval?.let {
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                it.respond(false)
+                return true
+            }
+            return false
+        }
+        if (settingsOpen && PlayerHub.state !is PlayerHub.State.Mirroring) {
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                settingsOpen = false
+                return true
+            }
+            return false
+        }
         val mirroring = PlayerHub.state is PlayerHub.State.Mirroring
         val statsVisible = statsText != null
         when (keyCode) {

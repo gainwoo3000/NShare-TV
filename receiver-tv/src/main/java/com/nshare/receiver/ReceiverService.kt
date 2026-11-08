@@ -31,6 +31,7 @@ class ReceiverService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        PlayerHub.attach(this)
         startAsForeground()
         val config = DeviceIdentity.load(this)
         multicastLock = (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
@@ -40,7 +41,10 @@ class ReceiverService : Service() {
             }
         val listener = object : ReceiverListener {
             override fun onSessionStart(client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks =
-                PlayerHub.startSession(this@ReceiverService, client, clock, disconnect = disconnect)
+                PlayerHub.startSession(this@ReceiverService, client, clock, key = airPlayKey(client), disconnect = disconnect)
+
+            override fun approveSession(client: ClientInfo): Boolean =
+                PlayerHub.requestApproval(this@ReceiverService, client.name ?: client.model ?: client.address, airPlayKey(client))
         }
         startNsp(config)
         server = AirPlayServer(this, config, listener).also {
@@ -64,6 +68,8 @@ class ReceiverService : Service() {
             }
         }
     }
+
+    private fun airPlayKey(client: ClientInfo) = "airplay:" + (client.deviceId ?: client.address)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 

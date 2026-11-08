@@ -37,4 +37,43 @@
     <string name="stats_audio2">        dropped %1$d (+%4$d silent) · silence %2$d ms · underruns %3$d</string>
     <string name="stats_offset">Offset  %1$s · clock %2$s</string>
     <string name="clock_arrival">arrival estimate</string>
+
+    <!-- Security / v2 -->
+    <string name="button_settings">Settings</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_security">Security</string>
+    <string name="settings_nsp_pin">NShare PIN pairing</string>
+    <string name="settings_nsp_pin_on">A new device must enter the PIN shown on the TV the first time it connects.</string>
+    <string name="settings_nsp_pin_off">Streams are always encrypted. Without a PIN, the first device to connect is trusted automatically, which doesn\'t protect that very first connection from impersonation.</string>
+    <string name="settings_approval">Ask before switching devices</string>
+    <string name="settings_approval_desc">While someone is mirroring, ask on the TV before another device takes over.</string>
+    <string name="settings_airplay">AirPlay security</string>
+    <string name="airplay_none">None</string>
+    <string name="airplay_pin">PIN on screen</string>
+    <string name="airplay_password">Password</string>
+    <string name="airplay_none_desc">iPhone, iPad and Mac connect without a code.</string>
+    <string name="airplay_pin_desc">Apple devices enter a 4-digit code shown on the TV.</string>
+    <string name="airplay_password_desc">Apple devices enter the password you set.</string>
+    <string name="settings_airplay_password">AirPlay password</string>
+    <string name="settings_password_unset">Not set</string>
+    <string name="settings_password_hint">Enter a password (at least 4 characters)</string>
+    <string name="settings_trusted">Trusted devices</string>
+    <string name="settings_trusted_empty">No trusted devices yet.</string>
+    <string name="settings_trusted_remove">Select to remove</string>
+    <string name="settings_trusted_clear">Remove all trusted devices</string>
+    <string name="settings_applies_next">Changes apply to the next connection.</string>
+    <string name="on">On</string>
+    <string name="off">Off</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="pin_title">Pair %1$s</string>
+    <string name="pin_body">Enter this PIN on %1$s</string>
+    <string name="approval_title">%1$s wants to share its screen</string>
+    <string name="approval_body">The current screen will be replaced. Declines automatically in %1$d s.</string>
+    <string name="approval_allow">Allow</string>
+    <string name="approval_deny">Decline</string>
+    <string name="reconnecting">Connection lost · reconnecting…</string>
+    <string name="notice_old_sender">An older NShare app tried to connect. Update the NShare app on the phone.</string>
+    <string name="airplay_pin_title">AirPlay code</string>
+    <string name="airplay_pin_body">Enter this code on your iPhone, iPad or Mac</string>
 </resources>
