@@ -38,8 +38,8 @@ class MirrorPlayer(
                 val r = stats.rates()
                 android.util.Log.i(
                     "NShare.Stats",
-                    "%s | in %.1f fps out %.1f fps %.1f Mbps late=%d skipped=%d | audio in=%d err=%+.1f ms dropped=%d silence=%d ms underruns=%d | ntp=%s rtt=%.1f ms".format(
-                        timeline.summary(), r.inputFps, r.renderFps, r.mbps, stats.videoLate.get(), stats.videoSkipped.get(),
+                    "%s perf=%s | in %.1f fps out %.1f fps %.1f Mbps late=%d skipped=%d | audio in=%d err=%+.1f ms dropped=%d silence=%d ms underruns=%d | ntp=%s rtt=%.1f ms".format(
+                        timeline.summary(), stats.audioPerfMode, r.inputFps, r.renderFps, r.mbps, stats.videoLate.get(), stats.videoSkipped.get(),
                         stats.audioPacketsIn.get(), stats.audioSyncErrorMs, stats.audioDropped.get(), stats.audioSilenceMs.get(),
                         stats.audioUnderruns.get(), clock.hasNtp, clock.lastRoundTripNs / 1e6,
                     ),

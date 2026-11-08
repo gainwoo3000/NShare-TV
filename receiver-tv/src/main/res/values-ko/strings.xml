@@ -29,7 +29,7 @@
     <string name="stats_rates">      입력 %1$.1f fps · 표시 %2$.1f fps · %3$.1f Mbps</string>
     <string name="stats_latency">지연  목표 %1$d ms (%2$s) · 네트워크 p95 %3$.0f ms · 디코드 p95 %4$.0f ms</string>
     <string name="stats_frames">      늦은 프레임 %1$d · 건너뜀 %2$d · 디코더 리셋 %3$d</string>
-    <string name="stats_audio">소리  싱크 오차 %1$+.1f ms · 출력 지연 %2$.0f ms</string>
+    <string name="stats_audio">소리  싱크 오차 %1$+.1f ms · 출력 지연 %2$.0f ms (%3$s)</string>
     <string name="stats_audio2">      버림 %1$d · 무음 %2$d ms · 언더런 %3$d</string>
     <string name="stats_offset">보정  %1$s · 시계 %2$s</string>
     <string name="clock_arrival">도착시간 추정</string>

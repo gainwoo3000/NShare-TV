@@ -21,6 +21,8 @@ class Stats {
     @Volatile var lastLateMs = 0.0
     /** Last measured audio scheduling error (positive = audio behind its slot). */
     @Volatile var audioSyncErrorMs = 0.0
+    /** AudioTrack performance mode actually granted ("low-latency" / "default"). */
+    @Volatile var audioPerfMode = "-"
 
     private var lastSnapshotNs = System.nanoTime()
     private var lastRendered = 0L

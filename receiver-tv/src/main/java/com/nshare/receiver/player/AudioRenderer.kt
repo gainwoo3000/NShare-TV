@@ -395,7 +395,21 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         return codec
     }
 
+    /** Prefers the low-latency output path (shorter mixer/HAL buffering); falls back if the device refuses. */
     private fun createTrack(): AudioTrack {
+        val track = try {
+            buildTrack(lowLatency = true)
+        } catch (e: Exception) {
+            Log.w(TAG, "low-latency AudioTrack refused (${e.message}), using the default path")
+            buildTrack(lowLatency = false)
+        }
+        val lowLatency = track.performanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
+        stats.audioPerfMode = if (lowLatency) "low-latency" else "default"
+        Log.i(TAG, "AudioTrack perfMode=${stats.audioPerfMode}")
+        return track
+    }
+
+    private fun buildTrack(lowLatency: Boolean): AudioTrack {
         val channelMask = if (channels == 1) AndroidAudioFormat.CHANNEL_OUT_MONO else AndroidAudioFormat.CHANNEL_OUT_STEREO
         val minBuf = AudioTrack.getMinBufferSize(sampleRate, channelMask, AndroidAudioFormat.ENCODING_PCM_16BIT)
         val bufferBytes = maxOf(minBuf * 4, sampleRate * channels * 2 / 5) // >= 200 ms
@@ -415,6 +429,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             )
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setBufferSizeInBytes(bufferBytes)
+            .setPerformanceMode(if (lowLatency) AudioTrack.PERFORMANCE_MODE_LOW_LATENCY else AudioTrack.PERFORMANCE_MODE_NONE)
             .build()
             .also { t ->
                 // Some TV outputs only start once the whole buffer is full; we schedule by timestamps
