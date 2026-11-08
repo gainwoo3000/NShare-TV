@@ -23,7 +23,8 @@ class AirPlayServer(
     internal val access: AirPlayAccess = OpenAirPlayAccess,
 ) {
     private val identity = Identity(config.identitySecret)
-    private val mdns = Mdns(context.applicationContext)
+    internal val context: Context = context.applicationContext
+    private val mdns = Mdns(this.context)
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
     private val sessions = CopyOnWriteArrayList<RtspSession>()
@@ -156,6 +157,9 @@ class AirPlayServer(
             }
         }
     }
+
+    /** Sends a playback command (playpause, nextitem, previtem) to the current sender, if it supports it. */
+    fun sendRemoteCommand(command: String): Boolean = active?.sendRemote(command) ?: false
 
     internal fun onSessionActive(session: RtspSession) {
         val previous = active

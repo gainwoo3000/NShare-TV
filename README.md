@@ -137,9 +137,20 @@ adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Vide
 - RTSP 요청, 영상 데이터, 소리 데이터가 8초 동안 하나도 없으면 세션을 닫습니다. 마지막 화면에 멈춰 있지 않게 하기 위해서입니다.
 - 기기 전환 승인에서 "같은 기기"는 pair-verify로 증명된 Ed25519 키로 판단합니다. 스스로 적어 보내는 deviceID는 쓰지 않습니다.
 
+## 음악 (AirPlay 오디오)
+- iPhone의 Apple Music 등에서 AirPlay로 음악을 보내면(화면 미러링이 아님) ALAC 44.1kHz/16비트로 옵니다. Android에는 ALAC 디코더가 없어서 `airplay/audio/AlacDecoder.kt`(Apple 공개 ALAC 디코더를 Kotlin으로 옮긴 것, Apache 2.0)로 디코딩합니다. `afconvert` 출력과 비트 단위로 같은지 테스트합니다.
+- 곡 제목·아티스트·앨범(DMAP), 커버(JPEG/PNG), 재생 위치(progress)를 받아 재생 화면을 띄웁니다. 커버를 흐리게 깐 배경 위에 유리 패널을 둡니다.
+- 리모컨: OK(재생/일시정지 키) = 재생/일시정지, ◀▶(이전/다음 키) = 이전 곡/다음 곡, 메뉴 키 = 진단 정보. DACP(`_dacp._tcp`, `/ctrl-int/1/playpause` 등)로 iPhone에 명령을 보냅니다.
+- 가사는 AirPlay로 전달되지 않아서 표시할 수 없습니다.
+- 디버그 빌드에서는 `adb shell am start -n namu0329.nshare.receiver/com.nshare.receiver.ui.MainActivity --ez demo_now_playing true`로 예시 화면을 볼 수 있습니다.
+
+## 다른 앱을 보는 중에 연결되면
+- Android 10부터 백그라운드 앱은 화면을 마음대로 띄울 수 없습니다. 설정 → "연결되면 자동으로 화면 띄우기"에서 "다른 앱 위에 표시"를 허용하면, 다른 앱을 보는 중에도 누가 연결하면 NShare 화면이 뜹니다.
+- 수신 서비스는 TV가 켜질 때 자동으로 시작되고(BootReceiver), 앱 화면을 닫아도 계속 실행됩니다.
+
 ## 알림 카드
 - 미러링 중 오른쪽 위에 카드로 표시합니다. 오른쪽에서 밀려 들어오고, 끝나면 오른쪽으로 빠지며 사라집니다.
-- 연결 알림("○○ 연결됨"): 미러링을 시작하거나 다른 기기가 넘겨받을 때 5초 동안 표시합니다.
+- 연결 알림("○○ 연결됨"): 미러링을 시작하거나 다른 기기가 넘겨받을 때 5초 동안 표시합니다. 화면이 다시 만들어져도(언어 변경 등) 이미 지나간 알림은 다시 뜨지 않습니다.
 - 인증번호(NShare PIN, AirPlay 코드): 15초 동안 표시하고, 아래 진행 바가 왼쪽에서 오른쪽으로 찹니다. 미러링 중이 아니면 화면 가운데에 크게 표시합니다.
 
 ## 광고

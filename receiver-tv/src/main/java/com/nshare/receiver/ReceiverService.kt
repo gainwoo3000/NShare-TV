@@ -72,6 +72,7 @@ class ReceiverService : Service() {
             try {
                 it.start()
                 PlayerHub.receiverPort = it.port
+                PlayerHub.mediaRemote = { command -> it.sendRemoteCommand(command) }
             } catch (e: Exception) {
                 Log.e(TAG, "failed to start AirPlay receiver", e)
             }

@@ -115,7 +115,12 @@ fun TvScreen(state: TvUiState, adUnitId: String, surfaceCallback: SurfaceHolder.
                     modifier = Modifier.aspectRatio(state.videoAspect.coerceIn(0.2f, 5f)),
                 )
             }
-            if (!state.videoActive && !state.reconnecting) WaitingForVideo(state.clientName)
+            val np = PlayerHub.nowPlaying
+            when {
+                // Music over AirPlay (no screen): cover, track and progress instead of "waiting".
+                !state.videoActive && np != null -> NowPlayingScreen(np, state.clientName)
+                !state.videoActive && !state.reconnecting -> WaitingForVideo(state.clientName)
+            }
             if (state.reconnecting) ReconnectingBanner()
         }
 
@@ -124,6 +129,8 @@ fun TvScreen(state: TvUiState, adUnitId: String, surfaceCallback: SurfaceHolder.
         AnimatedVisibility(visible = !state.mirroring && !state.settingsOpen, enter = fadeIn(), exit = fadeOut()) {
             IdleScreen(state, adUnitId, actions)
         }
+
+        if (PlayerHub.demoNowPlaying) PlayerHub.nowPlaying?.let { NowPlayingScreen(it, "김강민의 iPhone") }
 
         // The banner lives outside the idle layout so it survives the settings page and mirroring
         // (hidden, refresh paused) instead of being destroyed and reloaded each time, which left

@@ -59,11 +59,27 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
 
     override fun attachBaseContext(newBase: Context) = super.attachBaseContext(AppLanguage.wrap(newBase))
 
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleDebugIntent(intent)
+    }
+
+    /** Debug builds only: `--ez demo_now_playing true` shows the music screen with sample data. */
+    private fun handleDebugIntent(intent: android.content.Intent?) {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        if (intent?.hasExtra("demo_now_playing") == true) {
+            PlayerHub.showDemoNowPlaying(intent.getBooleanExtra("demo_now_playing", true))
+            // Handled once: a recreated activity (e.g. after a language switch) must not replay it.
+            intent.removeExtra("demo_now_playing")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
         ReceiverService.start(this)
         Ads.init(this, AdKeys.APP_KEY)
+        handleDebugIntent(intent)
         setContent {
             NShareTvTheme {
                 val s = hubState
@@ -149,6 +165,26 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
         }
         val mirroring = PlayerHub.state is PlayerHub.State.Mirroring
         val statsVisible = statsText != null
+        // Music over AirPlay: the remote controls playback on the phone.
+        val music = PlayerHub.demoNowPlaying ||
+            (PlayerHub.nowPlaying != null && (PlayerHub.state as? PlayerHub.State.Mirroring)?.videoActive == false)
+        if (music && !statsVisible) {
+            val command = when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> "playpause"
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_NEXT -> "nextitem"
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "previtem"
+                else -> null
+            }
+            if (command != null) {
+                PlayerHub.mediaCommand(this, command)
+                return true
+            }
+        }
+        if (music && keyCode == KeyEvent.KEYCODE_MENU) {
+            toggleStats()
+            return true
+        }
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> if (mirroring) {
                 toggleStats()

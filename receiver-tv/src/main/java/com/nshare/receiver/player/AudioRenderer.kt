@@ -3,6 +3,7 @@ package com.nshare.receiver.player
 import android.media.AudioAttributes
 import android.media.AudioTimestamp
 import android.media.AudioTrack
+import com.nshare.airplay.audio.AlacDecoder
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -161,6 +162,10 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         sampleRate = format.sampleRate
         channels = format.channels
+        if (format.compressionType == 2) {
+            runAlac(format)
+            return
+        }
         val codec = try {
             createDecoder(format)
         } catch (e: Exception) {
@@ -243,6 +248,52 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         } finally {
             try { codec.stop() } catch (_: Exception) {}
             codec.release()
+            try { track.stop() } catch (_: Exception) {}
+            track.release()
+        }
+    }
+
+    /**
+     * ALAC (AirPlay music: 44.1 kHz / 16 bit / 2 ch, 352 frames per packet). Android has no ALAC
+     * MediaCodec, so packets are decoded in software; it costs well under 1 % of a core.
+     */
+    private fun runAlac(format: AudioFormat) {
+        val decoder = AlacDecoder(
+            AlacDecoder.Config.AIRPLAY.copy(
+                frameLength = format.samplesPerFrame.takeIf { it > 0 } ?: 352,
+                numChannels = format.channels,
+                sampleRate = format.sampleRate,
+            ),
+        )
+        val frame = ShortArray((format.samplesPerFrame.takeIf { it > 0 } ?: 352) * format.channels)
+        Log.i(TAG, "ALAC ${format.sampleRate} Hz ${format.channels} ch, ${format.samplesPerFrame} frames/packet")
+        track = createTrack()
+        lastUnderrunCount = -1
+        track.play()
+        var errors = 0
+        try {
+            while (running) {
+                if (flushRequested) {
+                    flushRequested = false
+                    resetTrack()
+                }
+                if (appliedGain != gain) {
+                    appliedGain = gain
+                    track.setVolume(appliedGain)
+                }
+                val packet = queue.poll(20, TimeUnit.MILLISECONDS) ?: continue
+                val n = try {
+                    decoder.decode(packet.data, packet.data.size, frame)
+                } catch (e: Exception) {
+                    if (errors++ < 5) Log.w(TAG, "ALAC packet not decoded: ${e.message}")
+                    continue
+                }
+                if (n > 0) writeScheduled(frame.copyOf(n * channels), packet.remoteNs)
+            }
+        } catch (_: InterruptedException) {
+        } catch (e: Exception) {
+            Log.e(TAG, "ALAC render loop failed", e)
+        } finally {
             try { track.stop() } catch (_: Exception) {}
             track.release()
         }

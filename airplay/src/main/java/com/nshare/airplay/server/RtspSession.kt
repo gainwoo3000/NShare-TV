@@ -2,6 +2,7 @@ package com.nshare.airplay.server
 
 import android.util.Log
 import com.nshare.airplay.AirPlayAccessMode
+import com.nshare.airplay.TrackInfo
 import com.nshare.airplay.AudioFormat
 import com.nshare.airplay.ClientInfo
 import com.nshare.airplay.ReceiverConfig
@@ -87,12 +88,28 @@ internal class RtspSession(
     }
 
     fun close() {
+        dacp?.close()
         try { socket.close() } catch (_: Exception) {}
         stopStreams()
     }
 
+    /** Playback remote control of this sender (music apps announce it with DACP-ID / Active-Remote). */
+    @Volatile private var dacp: DacpRemote? = null
+
+    /** Sends a DACP command (playpause, nextitem, previtem) to this sender; false if it has none. */
+    fun sendRemote(command: String): Boolean {
+        val d = dacp ?: return false
+        d.send(command)
+        return true
+    }
+
     @Synchronized
     private fun handle(req: RtspRequest, res: RtspResponse) {
+        if (dacp == null) {
+            val id = req.header("DACP-ID")
+            val token = req.header("Active-Remote")
+            if (id != null && token != null) dacp = DacpRemote(server.context, id, token, remoteAddress)
+        }
         when (req.method) {
             "GET" -> if (req.path.startsWith("/info")) handleInfo(req, res) else res.status(404, "Not Found")
             "POST" -> when (req.path) {
@@ -483,12 +500,31 @@ internal class RtspSession(
     private var lastVolume = -15f
 
     private fun handleSetParameter(req: RtspRequest) {
-        if (req.contentType?.startsWith("text/parameters") != true) return
-        val text = String(req.body)
-        if (text.startsWith("volume:")) {
-            val v = text.substringAfter(':').trim().toFloatOrNull() ?: return
-            lastVolume = v
-            sinks?.audio?.onVolume(v)
+        val type = req.contentType ?: return
+        val audio = sinks?.audio ?: return
+        when {
+            type.startsWith("text/parameters") -> {
+                val text = String(req.body)
+                if (text.startsWith("volume:")) {
+                    val v = text.substringAfter(':').trim().toFloatOrNull() ?: return
+                    lastVolume = v
+                    audio.onVolume(v)
+                } else if (text.startsWith("progress:")) {
+                    // "progress: start/current/end" in RTP time (44.1 kHz).
+                    val p = text.substringAfter(':').trim().split('/').mapNotNull { it.trim().toLongOrNull() }
+                    if (p.size == 3) {
+                        val elapsed = ((p[1] - p[0]) and 0xffffffffL) * 1000 / 44_100
+                        val duration = ((p[2] - p[0]) and 0xffffffffL) * 1000 / 44_100
+                        audio.onProgress(elapsed, duration)
+                    }
+                }
+            }
+            type.startsWith("image/") -> audio.onArtwork(req.body.takeIf { it.isNotEmpty() })
+            type.startsWith("application/x-dmap-tagged") -> {
+                val tags = Dmap.parse(req.body)
+                audio.onTrackInfo(TrackInfo(tags["minm"], tags["asar"], tags["asal"]))
+                Log.i(TAG, "now playing: ${tags["asar"]} - ${tags["minm"]}")
+            }
         }
     }
 

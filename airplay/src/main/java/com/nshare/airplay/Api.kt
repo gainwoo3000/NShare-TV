@@ -78,6 +78,9 @@ interface VideoSink {
     fun onVideoStopped()
 }
 
+/** Now-playing information an audio sender announces (AirPlay music: DMAP metadata). */
+class TrackInfo(val title: String?, val artist: String?, val album: String?)
+
 interface AudioSink {
     fun onAudioStart(format: AudioFormat)
     fun onAudioPacket(packet: AudioPacket)
@@ -85,6 +88,15 @@ interface AudioSink {
     fun onAudioStop()
     /** AirPlay volume in dB: -144 = mute, otherwise -30..0. */
     fun onVolume(db: Float)
+
+    /** Title / artist / album of the track now playing (music senders such as Apple Music). */
+    fun onTrackInfo(info: TrackInfo) {}
+
+    /** Cover art (JPEG or PNG bytes); null when the sender cleared it. */
+    fun onArtwork(image: ByteArray?) {}
+
+    /** Playback position of the track, valid at the time of the call. */
+    fun onProgress(elapsedMs: Long, durationMs: Long) {}
 }
 
 class ClientInfo(

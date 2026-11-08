@@ -118,6 +118,27 @@ fun SettingsScreen() {
                 }
             }
             item {
+                // Re-checked while the page is open, so returning from the system page updates it.
+                var canOverlay by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(context)) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        canOverlay = android.provider.Settings.canDrawOverlays(context)
+                        kotlinx.coroutines.delay(1_000)
+                    }
+                }
+                ListItem(
+                    selected = false,
+                    onClick = { openOverlaySettings(context) },
+                    headlineContent = { Text(stringResource(R.string.settings_auto_open)) },
+                    supportingContent = {
+                        Text(stringResource(if (canOverlay) R.string.settings_auto_open_on else R.string.settings_auto_open_off))
+                    },
+                    trailingContent = {
+                        Text(stringResource(if (canOverlay) R.string.settings_allowed else R.string.settings_allow_needed))
+                    },
+                )
+            }
+            item {
                 Spacer(Modifier.height(20.dp))
                 SectionTitle(stringResource(R.string.settings_security))
             }
@@ -301,4 +322,22 @@ private fun TextEditor(
             OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
         }
     }
+}
+
+/** Opens the system page for "display over other apps" (needed to come to the front on connect). */
+private fun openOverlaySettings(context: android.content.Context) {
+    val pkg = android.net.Uri.parse("package:" + context.packageName)
+    val intents = listOf(
+        android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkg),
+        android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION),
+        android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg),
+    )
+    for (i in intents) {
+        try {
+            context.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        } catch (_: Exception) {
+        }
+    }
+    com.nshare.receiver.PlayerHub.showNotice(context.getString(R.string.settings_auto_open_unavailable))
 }

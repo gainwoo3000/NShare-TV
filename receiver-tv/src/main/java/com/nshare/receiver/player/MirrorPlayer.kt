@@ -3,6 +3,7 @@ package com.nshare.receiver.player
 import com.nshare.airplay.AudioFormat
 import com.nshare.airplay.AudioPacket
 import com.nshare.airplay.AudioSink
+import com.nshare.airplay.TrackInfo
 import com.nshare.airplay.ClientInfo
 import com.nshare.airplay.SessionSinks
 import com.nshare.airplay.VideoConfig
@@ -24,6 +25,10 @@ class MirrorPlayer(
         fun onVideoSize(player: MirrorPlayer, width: Int, height: Int)
         fun onVideoActive(player: MirrorPlayer, active: Boolean)
         fun onEnded(player: MirrorPlayer)
+        fun onTrackInfo(player: MirrorPlayer, info: TrackInfo) {}
+        fun onArtwork(player: MirrorPlayer, image: ByteArray?) {}
+        fun onProgress(player: MirrorPlayer, elapsedMs: Long, durationMs: Long) {}
+        fun onAudioPaused(player: MirrorPlayer) {}
     }
 
     val timeline = Timeline(clock, mode, avOffsetMs)
@@ -93,9 +98,15 @@ class MirrorPlayer(
             audioRenderer.submit(packet)
         }
 
-        override fun onAudioFlush() = audioRenderer.flush()
+        override fun onAudioFlush() {
+            audioRenderer.flush()
+            events.onAudioPaused(this@MirrorPlayer) // music senders flush on pause and seek
+        }
         override fun onAudioStop() = audioRenderer.stop()
         override fun onVolume(db: Float) = audioRenderer.setVolume(db)
+        override fun onTrackInfo(info: TrackInfo) = events.onTrackInfo(this@MirrorPlayer, info)
+        override fun onArtwork(image: ByteArray?) = events.onArtwork(this@MirrorPlayer, image)
+        override fun onProgress(elapsedMs: Long, durationMs: Long) = events.onProgress(this@MirrorPlayer, elapsedMs, durationMs)
     }
 
     override fun onSessionEnd() {

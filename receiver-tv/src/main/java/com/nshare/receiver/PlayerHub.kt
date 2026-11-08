@@ -1,6 +1,7 @@
 package com.nshare.receiver
 
 import android.content.Context
+import androidx.compose.ui.graphics.asImageBitmap
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -76,6 +77,96 @@ object PlayerHub {
     var toast by mutableStateOf<Toast?>(null)
         private set
     private var toastSeq = 0
+    /**
+     * When each toast was first shown (by key). Lives here, not in the UI, so a recreated screen
+     * (e.g. after switching the language) continues a card or skips it instead of replaying it.
+     */
+    private val toastShownAt = HashMap<String, Long>()
+
+    /** Remaining time for [t] in ms; starts its clock on the first call. */
+    fun toastRemainingMs(t: Toast): Long {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val start = synchronized(toastShownAt) {
+            if (toastShownAt.size > 64) toastShownAt.clear()
+            toastShownAt.getOrPut(t.key) { now }
+        }
+        return t.durationMs - (now - start)
+    }
+
+    /**
+     * Music the sender is playing (AirPlay audio from Apple Music etc.): track, cover and position.
+     * [elapsedMs] was valid at [atMs] (elapsedRealtime); while not [paused] it advances in real time.
+     */
+    data class NowPlaying(
+        val title: String? = null,
+        val artist: String? = null,
+        val album: String? = null,
+        val artwork: androidx.compose.ui.graphics.ImageBitmap? = null,
+        val elapsedMs: Long = 0,
+        val durationMs: Long = 0,
+        val atMs: Long = 0,
+        val paused: Boolean = false,
+    ) {
+        fun positionMs(nowMs: Long): Long =
+            (if (paused) elapsedMs else elapsedMs + (nowMs - atMs)).coerceIn(0, durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
+    }
+
+    var nowPlaying by mutableStateOf<NowPlaying?>(null)
+        private set
+    /** Sends playback commands to the current AirPlay sender (DACP); false if it has no remote control. */
+    @Volatile var mediaRemote: ((String) -> Boolean)? = null
+
+    /** Last remote command, for a short highlight of the matching on-screen button. */
+    class MediaCommand(val command: String, val atMs: Long)
+
+    var lastMediaCommand by mutableStateOf<MediaCommand?>(null)
+        private set
+
+    /** playpause / nextitem / previtem from the TV remote while music is shown. */
+    fun mediaCommand(context: Context, command: String) {
+        val sent = if (demoNowPlaying) true else mediaRemote?.invoke(command) ?: false
+        if (!sent) {
+            showNotice(context.getString(R.string.now_playing_no_remote))
+            return
+        }
+        lastMediaCommand = MediaCommand(command, android.os.SystemClock.elapsedRealtime())
+        if (command == "playpause") {
+            // Show the new state right away; the sender confirms with a flush (pause) or progress (play).
+            val now = android.os.SystemClock.elapsedRealtime()
+            nowPlaying = nowPlaying?.let { it.copy(elapsedMs = it.positionMs(now), atMs = now, paused = !it.paused) }
+        }
+    }
+
+    /** Debug builds: the music screen with sample data, for checking the layout on a TV. */
+    var demoNowPlaying by mutableStateOf(false)
+        private set
+
+    fun showDemoNowPlaying(show: Boolean) {
+        demoNowPlaying = show
+        if (!show) {
+            if (player == null) nowPlaying = null
+            return
+        }
+        val bmp = android.graphics.Bitmap.createBitmap(600, 600, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(bmp)
+        val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        p.shader = android.graphics.LinearGradient(0f, 0f, 600f, 600f, 0xFFFF5E62.toInt(), 0xFF6A3FD8.toInt(), android.graphics.Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, 600f, 600f, p)
+        p.shader = null
+        p.color = 0x55FFFFFF
+        c.drawCircle(420f, 200f, 150f, p)
+        p.color = 0x33000000
+        c.drawCircle(180f, 430f, 120f, p)
+        nowPlaying = NowPlaying(
+            title = "Supernova", artist = "aespa", album = "Armageddon - The 1st Album",
+            artwork = bmp.asImageBitmap(), elapsedMs = 74_000, durationMs = 178_000,
+            atMs = android.os.SystemClock.elapsedRealtime(),
+        )
+    }
+
+    private fun updateNowPlaying(player: MirrorPlayer, change: (NowPlaying) -> NowPlaying) = post {
+        if (player === this.player) nowPlaying = change(nowPlaying ?: NowPlaying())
+    }
 
     /** The NShare (Android sender) receiver could not start; shown on the idle screen. */
     var nshareUnavailable by mutableStateOf(false)
@@ -134,6 +225,7 @@ object PlayerHub {
         // The newest sender wins, whichever protocol either of them uses.
         if (previousDisconnect != null) Thread { previousDisconnect() }.start()
         player = p
+        nowPlaying = null
         p.setSurface(surface)
         val name = client.name ?: client.model ?: client.address
         Log.i(TAG, "session started: $name")
@@ -280,9 +372,30 @@ object PlayerHub {
             if (s is State.Mirroring && s.videoActive != active) setState(s.copy(videoActive = active))
         }
 
+        override fun onTrackInfo(player: MirrorPlayer, info: com.nshare.airplay.TrackInfo) =
+            updateNowPlaying(player) { it.copy(title = info.title, artist = info.artist, album = info.album) }
+
+        override fun onArtwork(player: MirrorPlayer, image: ByteArray?) {
+            // Decoding a large cover takes a while: off the main thread, scaled to what the screen shows.
+            Thread({
+                val bitmap = image?.let { decodeArtwork(it) }
+                updateNowPlaying(player) { it.copy(artwork = bitmap) }
+            }, "nshare-artwork").start()
+        }
+
+        override fun onProgress(player: MirrorPlayer, elapsedMs: Long, durationMs: Long) = updateNowPlaying(player) {
+            it.copy(elapsedMs = elapsedMs, durationMs = durationMs, atMs = android.os.SystemClock.elapsedRealtime(), paused = false)
+        }
+
+        override fun onAudioPaused(player: MirrorPlayer) = updateNowPlaying(player) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            it.copy(elapsedMs = it.positionMs(now), atMs = now, paused = true)
+        }
+
         override fun onEnded(player: MirrorPlayer) = post {
             if (player !== this@PlayerHub.player) return@post
             this@PlayerHub.player = null
+            nowPlaying = null
             currentKey = null
             cancelDropTimeout()
             wifiLock?.release()
@@ -291,6 +404,15 @@ object PlayerHub {
             setState(State.Idle)
         }
     }
+
+    private fun decodeArtwork(bytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 800) sample *= 2
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+    }.getOrNull()
 
     private fun setState(s: State) {
         state = s

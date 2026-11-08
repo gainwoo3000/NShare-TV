@@ -117,10 +117,13 @@ fun ToastHost(toast: PlayerHub.Toast?) {
             snapshotFlow { visible.isIdle }.first { it }
         }
         if (toast == null) return@LaunchedEffect
+        // Already shown (e.g. before the screen was recreated): continue where it was, or skip it.
+        val remaining = PlayerHub.toastRemainingMs(toast)
+        if (remaining <= 0) return@LaunchedEffect
         current = toast
-        progress.snapTo(0f)
+        progress.snapTo(1f - remaining.toFloat() / toast.durationMs)
         visible.targetState = true
-        progress.animateTo(1f, tween(toast.durationMs, easing = LinearEasing))
+        progress.animateTo(1f, tween(remaining.toInt(), easing = LinearEasing))
         visible.targetState = false
     }
     Box(Modifier.fillMaxSize().padding(top = 27.dp, end = 48.dp), contentAlignment = Alignment.TopEnd) {
