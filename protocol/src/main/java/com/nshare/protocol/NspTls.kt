@@ -40,35 +40,12 @@ object NspTls {
         }.toTypedArray()
     }
 
-    /**
-     * Wraps an accepted TCP socket as the TLS server; the client must present a certificate.
-     * [consumed] are bytes already read from [plain] (to tell a v1 sender from a TLS client).
-     */
-    fun server(ctx: SSLContext, plain: Socket, consumed: ByteArray? = null): SSLSocket =
-        (
-            if (consumed != null) {
-                createSocketWithConsumed(ctx.socketFactory, plain, consumed)
-            } else {
-                ctx.socketFactory.createSocket(plain, plain.inetAddress.hostAddress, plain.port, true)
-            } as SSLSocket
-        ).apply {
+    /** Wraps an accepted TCP socket as the TLS server; the client must present a certificate. */
+    fun server(ctx: SSLContext, plain: Socket): SSLSocket =
+        (ctx.socketFactory.createSocket(plain, plain.inetAddress.hostAddress, plain.port, true) as SSLSocket).apply {
             useClientMode = false
             needClientAuth = true
             restrict()
-        }
-
-    /**
-     * SSLSocketFactory.createSocket(Socket, InputStream, boolean) (Java 8 / Android 7). Called
-     * reflectively because the Kotlin compiler does not resolve that overload here. Throws
-     * [UnsupportedOperationException] if the TLS provider does not implement it.
-     */
-    private fun createSocketWithConsumed(f: javax.net.ssl.SSLSocketFactory, plain: Socket, consumed: ByteArray): Socket =
-        try {
-            javax.net.ssl.SSLSocketFactory::class.java
-                .getMethod("createSocket", Socket::class.java, java.io.InputStream::class.java, Boolean::class.javaPrimitiveType)
-                .invoke(f, plain, java.io.ByteArrayInputStream(consumed), true) as Socket
-        } catch (e: java.lang.reflect.InvocationTargetException) {
-            throw e.targetException
         }
 
     /** Wraps a connected TCP socket as the TLS client. */

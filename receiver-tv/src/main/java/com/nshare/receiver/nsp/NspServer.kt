@@ -59,8 +59,6 @@ class NspServer(private val context: Context, private val caps: Caps) {
     private val pendingHandshakes = AtomicInteger()
     /** Only one device may pair at a time, so PIN prompts never overwrite each other. */
     private val pairing = java.util.concurrent.atomic.AtomicBoolean(false)
-    /** Whether the platform can start TLS after we peeked at the first bytes (see [Session.run]). */
-    @Volatile private var peekSupported = true
     private var lastOldSenderNoticeMs = 0L
     private val scheduler = Executors.newScheduledThreadPool(2) { r -> Thread(r, "nsp-timer").apply { isDaemon = true } }
     private val security = SecuritySettings(context)
@@ -181,12 +179,16 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 plain.tcpNoDelay = true
                 plain.keepAlive = true
                 plain.soTimeout = Nsp.HANDSHAKE_TIMEOUT_MS.toInt()
-                val ssl = startTls(address) ?: return
+                val ssl = NspTls.server(tls, plain)
                 socket = ssl
                 try {
                     ssl.startHandshake()
                 } catch (e: SSLException) {
                     Log.w(TAG, "TLS handshake with $address failed: ${e.message}")
+                    // A version 1 sender talks plain TCP, so its first bytes are no TLS record. The TLS
+                    // stack reports any non-TLS data the same way (it cannot tell v1 from a port scan),
+                    // so the notice is limited to once a minute; other TLS failures get none.
+                    if (e.isNotTls()) oldSenderNotice()
                     return
                 }
                 val peerFp = NspTls.peerFingerprint(ssl)
@@ -300,31 +302,16 @@ class NspServer(private val context: Context, private val caps: Caps) {
             }, ms, TimeUnit.MILLISECONDS)
         }.getOrNull()
 
-        /**
-         * Peeks at the first bytes: a version 1 sender starts with the "NS" frame magic in plain
-         * text. Only then is "update the sender app" shown, not for every port scan or TLS error.
-         */
-        private fun startTls(address: String): SSLSocket? {
-            if (!peekSupported) return NspTls.server(tls, plain)
-            val first = ByteArray(2)
-            DataInputStream(plain.getInputStream()).readFully(first)
-            if (first[0] == 0x4E.toByte() && first[1] == 0x53.toByte()) {
-                Log.w(TAG, "version 1 sender at $address")
-                val now = System.currentTimeMillis()
-                if (now - lastOldSenderNoticeMs > OLD_SENDER_NOTICE_INTERVAL_MS) {
-                    lastOldSenderNoticeMs = now
-                    PlayerHub.showNotice(context.getString(R.string.notice_old_sender))
-                }
-                return null
-            }
-            return try {
-                NspTls.server(tls, plain, consumed = first)
-            } catch (e: UnsupportedOperationException) {
-                // This TLS provider cannot take already-read bytes: stop peeking (this one connection is lost).
-                Log.w(TAG, "TLS provider cannot resume after peeking; old-sender detection disabled")
-                peekSupported = false
-                null
-            }
+        private fun SSLException.isNotTls(): Boolean {
+            val m = message ?: return false
+            return NOT_TLS_MESSAGES.any { m.contains(it, ignoreCase = true) }
+        }
+
+        private fun oldSenderNotice() {
+            val now = System.currentTimeMillis()
+            if (now - lastOldSenderNoticeMs < OLD_SENDER_NOTICE_INTERVAL_MS) return
+            lastOldSenderNoticeMs = now
+            PlayerHub.showNotice(context.getString(R.string.notice_old_sender))
         }
 
         fun close() {
@@ -388,6 +375,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
         private const val TAG = "NShare.Nsp"
         private const val MAX_PENDING_HANDSHAKES = 8
         private const val OLD_SENDER_NOTICE_INTERVAL_MS = 60_000L
+        /** Conscrypt / BoringSSL wording for "the peer did not send a TLS record". */
+        private val NOT_TLS_MESSAGES = listOf("Unable to parse TLS packet header", "WRONG_VERSION_NUMBER")
         private val START = byteArrayOf(0, 0, 0, 1)
     }
 }

@@ -90,20 +90,13 @@ class HandshakeTest {
         phoneVersion: Int = Nsp.VERSION,
         pinFromTv: Boolean = false,
         tls12Only: Boolean = false,
-        peek: Boolean = false,
     ): Result {
         val pool = Executors.newFixedThreadPool(2)
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { ss ->
             val serverCtx = NspTls.context(tv.keyManagers, PinningTrustManager { true })
             val server = pool.submit<Pair<Hello?, Exception?>> {
                 ss.accept().use { plain ->
-                    val s = if (peek) {
-                        // Like the TV: read the first bytes to recognise a v1 sender, then start TLS.
-                        val first = ByteArray(2).also { DataInputStream(plain.getInputStream()).readFully(it) }
-                        NspTls.server(serverCtx, plain, first)
-                    } else {
-                        NspTls.server(serverCtx, plain)
-                    }
+                    val s = NspTls.server(serverCtx, plain)
                     if (tls12Only) s.enabledProtocols = arrayOf("TLSv1.2") // like an Android 8/9 TV
                     try {
                         s.startHandshake()
@@ -244,12 +237,6 @@ class HandshakeTest {
         val tvPolicy = TvPolicy(pinPairing = true)
         connect(tvPolicy, PhonePolicy(emptyList()), pinFromTv = true)
         assertTrue(tvPolicy.pairingEnded)
-    }
-
-    @Test
-    fun tlsAfterPeekingAtTheFirstBytes() {
-        val r = connect(TvPolicy(pinPairing = false), PhonePolicy(emptyList()), peek = true)
-        assertTrue("client: ${r.clientError} server: ${r.serverError}", r.caps != null)
     }
 
     @Test

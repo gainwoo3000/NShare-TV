@@ -91,6 +91,8 @@ adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Vide
 - **AirPlay 보안**:
   - 없음
   - 화면 PIN: Apple 기기에 TV 화면의 4자리 코드를 입력하게 합니다. 한 번 페어링한 기기는 다음부터 바로 연결됩니다. 코드는 2분 동안 유효합니다.
+    - 페어링된 기기도 연결할 때마다 pair-verify 서명으로 그 키를 가졌음을 증명해야 합니다. 증명 전에는 SETUP이 거부(470)됩니다.
+  - 미러링 중에 PIN이 필요하면 화면을 가리지 않도록 오른쪽 위에 작은 카드로 표시합니다.
   - 암호: 정해 둔 암호를 입력해야 연결됩니다. 암호를 아직 저장하지 않았으면 열린 상태로 동작합니다.
 - **TV 이름**: 설정 → 기기 → TV 이름에서 바꿉니다. 저장하면 AirPlay와 NShare 수신기가 새 이름으로 다시 시작합니다. 비워 두면 기본 이름(NShare-XXXX)으로 돌아갑니다.
 - **신뢰하는 기기**: PIN이나 TOFU로 등록된 휴대폰과 Apple 기기 목록입니다. 하나씩 또는 전체를 삭제할 수 있습니다.
@@ -98,26 +100,32 @@ adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Vide
 
 ## NShare 프로토콜 (v2)
 - **발견**: mDNS `_nshare._tcp`, TCP 포트 7100. TXT 레코드에 `v=2`(프로토콜 버전)와 `fp`(인증서 지문 앞 8바이트)가 있습니다.
-- **암호화**: TLS 1.3, 양방향 인증.
+- **암호화**: TLS 1.3, 양방향 인증. TLS 1.3이 없는 Android 8/9 TV에서는 TLS 1.2(ECDHE-ECDSA + AES-GCM/ChaCha20만)로 연결합니다.
   - 각 기기는 AndroidKeyStore에 EC P-256 키와 자체 서명 인증서를 한 번 만들어 둡니다.
-  - 상대는 인증서의 SHA-256 지문으로 식별하고 고정(pinning)합니다. 송신 앱은 TV 이름별로 지문을 기억하고, 바뀌면 연결을 거부합니다.
+  - 상대는 인증서의 SHA-256 지문으로 식별합니다. 송신 앱은 TV를 지문 기준으로 저장합니다(이름은 표시용). TV가 mDNS로 저장된 TV의 지문을 내세우면 TLS 인증서가 정확히 그 TV여야 하고, 재연결은 같은 세션의 TV에만 됩니다.
 - **프레임 형식**: `magic(2) type(1) flags(1) length(4) timeNs(8) payload` (TLS 안에서)
 - **흐름**: HELLO → [PAIR_REQUIRED → PAIR_PROOF ⇄ PAIR_RESULT] → [WAIT_APPROVAL] → CAPS 또는 ERROR → VIDEO_CONFIG / AUDIO_CONFIG → 미디어 프레임
-  - **PIN 증명**: 양쪽이 PIN, 두 인증서 지문, 두 nonce로 HMAC-SHA256을 계산해 주고받습니다(송신/수신 라벨 분리). PIN은 네트워크로 보내지 않습니다.
-  - **ERROR 코드**: `version`(앱 업데이트 필요), `rejected`, `pairing`, `protocol`. v1 송신기는 TLS 단계에서 실패하고, TV에 "앱을 업데이트하세요" 안내가 나옵니다.
+  - **PIN 페어링**: SRP-6a(RFC 5054 2048비트 그룹, SHA-256). 신원(identity)에 TV와 휴대폰의 인증서 지문을 모두 넣습니다.
+    - PIN은 네트워크로 보내지 않고, 오가는 값으로 PIN을 오프라인에서 맞춰 볼 수 없습니다(연결 한 번에 추측 한 번).
+    - 중간자가 양쪽과 각각 TLS를 맺고 메시지를 그대로 전달해도, 양쪽이 보는 인증서가 달라 증명이 맞지 않습니다.
+    - PIN이 틀리면 TV가 새 SRP 값으로 PAIR_REQUIRED를 다시 보냅니다(PIN은 그대로).
+    - 페어링은 TV 전체에서 한 번에 하나만 합니다. 진행 중이면 다른 기기는 ERROR `busy`를 받습니다.
+  - **신뢰 저장 시점**: 새 기기(PIN 페어링이든 첫 연결 신뢰든)는 승인까지 통과한 뒤, CAPS 직전에 저장합니다. 거부된 기기는 저장되지 않습니다.
+  - **ERROR 코드**: `version`(앱 업데이트 필요), `rejected`, `pairing`, `busy`, `protocol`.
+  - v1 송신기는 평문 TCP라 TLS 단계에서 실패합니다. TLS가 아닌 데이터로 실패하면 TV에 "앱을 업데이트하세요" 안내를 띄우되, 포트 스캔 등과 구별할 수 없어 1분에 한 번만 띄웁니다.
 - **연결 유지**: CAPS 이후 양쪽이 1초마다 PING을 보내고, 5초 동안 아무 프레임도 없으면 끊긴 것으로 봅니다.
 - **재연결**:
-  - 송신 앱은 네트워크가 끊기면 1, 2, 4 … 최대 30초 간격으로 다시 연결합니다. 캡처와 인코더는 계속 돌고, 다시 연결되면 코덱 설정을 다시 보내고 키프레임을 요청합니다.
+  - 송신 앱은 네트워크가 끊기면 1, 2, 4 … 최대 30초 간격으로 2분 동안 다시 연결하고, 그래도 안 되면 공유를 끝냅니다. 기다리는 동안 인코더 입력은 멈추고, 다시 연결되면 코덱 설정을 다시 보내고 키프레임을 요청합니다.
   - TV는 끊긴 세션의 마지막 화면을 10초 동안 "다시 연결하는 중" 표시와 함께 유지합니다. 같은 기기(지문)가 돌아오면 플레이어를 그대로 이어서 씁니다.
   - BYE는 의도적인 종료입니다. TV에서 공유를 끝내거나 다른 기기가 넘겨받으면 BYE를 보내서 휴대폰이 재연결하지 않게 합니다.
 - **수신기 → 송신기**: KEYFRAME_REQUEST. 디코더를 다시 만들 때, 화면 출력 대상이 바뀔 때, 키프레임을 기다릴 때 보냅니다(초당 최대 1회).
 - **시계 동기화**: 수신기가 송신기의 UDP 타이밍 포트로 NTP 방식 요청을 보냅니다.
 - **인증 전 제한**:
-  - HELLO 페이로드는 최대 16KB이고, 핸드셰이크는 10초 안에 끝나야 합니다.
-  - 미인증 연결은 동시에 최대 4개까지 받습니다.
+  - HELLO 페이로드는 최대 16KB이고, TLS와 HELLO는 10초 안에 끝나야 합니다. HELLO 이후 핸드셰이크 전체(PIN 입력, 승인)는 절대 시간 2분 안에 끝나야 합니다.
+  - 신원을 모르는 연결은 동시에 최대 8개까지 받습니다. 이미 신뢰한 기기는 TLS 직후 이 개수에서 빠지므로, 낯선 연결이 슬롯을 차지해도 막히지 않습니다.
   - 길이 필드는 메모리를 할당하기 전에 검사합니다.
-  - PIN 입력은 최대 2분, 승인 대기는 최대 10초입니다.
-- **테스트**: `HandshakeTest`는 JVM에서 실제 TLS 1.3 핸드셰이크를 돌립니다. `LiveReceiverTest`는 실제 TV에 붙는 선택 테스트입니다.
+  - 승인 대기는 최대 10초입니다. 승인 요청이 이미 떠 있으면 나중 요청은 바로 거부합니다.
+- **테스트**: `HandshakeTest`는 JVM에서 실제 TLS 핸드셰이크(1.3, 1.2 대체 경로, SRP, 중간자 중계, busy, 승인 후 신뢰)를 돌립니다. `LiveReceiverTest`는 실제 TV에 붙는 선택 테스트입니다.
   ```sh
   NSHARE_TV_HOST=<TV IP> NSHARE_SCENARIO=connect ./gradlew :protocol:testDebugUnitTest --tests '*LiveReceiverTest*'
   # NSHARE_SCENARIO: connect | pin | v1 | drop
@@ -125,6 +133,7 @@ adb logcat -s NShare.Rtsp NShare.Mirror NShare.Audio NShare.AudioOut NShare.Vide
 
 ## AirPlay 세션 감시
 - RTSP 요청, 영상 데이터, 소리 데이터가 8초 동안 하나도 없으면 세션을 닫습니다. 마지막 화면에 멈춰 있지 않게 하기 위해서입니다.
+- 기기 전환 승인에서 "같은 기기"는 pair-verify로 증명된 Ed25519 키로 판단합니다. 스스로 적어 보내는 deviceID는 쓰지 않습니다.
 
 ## 광고
 - `ads/` 모듈이 Unity LevelPlay를 초기화하고 하단 배너를 띄웁니다. TV에서는 대기 화면에만 표시됩니다.
