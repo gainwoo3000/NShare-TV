@@ -9,6 +9,7 @@ import android.view.Surface
 import com.nshare.airplay.ClientInfo
 import com.nshare.airplay.SessionSinks
 import com.nshare.airplay.time.ClockSync
+import com.nshare.common.WifiLatencyLock
 import com.nshare.receiver.player.MirrorPlayer
 import com.nshare.receiver.ui.MainActivity
 
@@ -44,6 +45,7 @@ object PlayerHub {
     @Volatile var receiverName: String = ""
     @Volatile var receiverPort: Int = 0
     private var disconnectCurrent: (() -> Unit)? = null
+    private var wifiLock: WifiLatencyLock? = null
 
     fun addListener(l: Listener) {
         listeners += l
@@ -68,6 +70,7 @@ object PlayerHub {
     fun startSession(context: Context, client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks {
         val settings = Settings(context)
         val p = MirrorPlayer(client, clock, settings.latencyMode, settings.avOffsetMs, events)
+        (wifiLock ?: WifiLatencyLock(context, "nshare-receiver").also { wifiLock = it }).acquire()
         val previousDisconnect = disconnectCurrent
         disconnectCurrent = disconnect
         player?.onSessionEnd()
@@ -110,6 +113,7 @@ object PlayerHub {
         override fun onEnded(player: MirrorPlayer) = post {
             if (player !== this@PlayerHub.player) return@post
             this@PlayerHub.player = null
+            wifiLock?.release()
             videoWidth = 0
             videoHeight = 0
             setState(State.Idle)
