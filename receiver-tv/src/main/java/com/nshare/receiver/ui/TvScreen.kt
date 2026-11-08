@@ -27,6 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -122,16 +125,36 @@ fun TvScreen(state: TvUiState, adUnitId: String, surfaceCallback: SurfaceHolder.
             IdleScreen(state, adUnitId, actions)
         }
 
+        // The banner lives outside the idle layout so it survives the settings page and mirroring
+        // (hidden, refresh paused) instead of being destroyed and reloaded each time, which left
+        // the slot empty for 20-30 s.
+        val showAd = !state.mirroring && !state.settingsOpen
+        val adAlpha by animateFloatAsState(if (showAd) 1f else 0f, label = "ad")
+        Box(Modifier.fillMaxSize().padding(bottom = SafeVertical), contentAlignment = Alignment.BottomCenter) {
+            BannerAd(adUnitId, Modifier.width(320.dp).alpha(adAlpha), size = BannerSize.STANDARD, active = showAd)
+        }
+
         if (state.settingsOpen) SettingsScreen()
 
         state.stats?.let { if (!state.settingsOpen) StatsPanel(it, belowTopBar = !state.mirroring) }
 
-        PlayerHub.pinPrompt?.let {
-            PinOverlay(stringResource(R.string.pin_title, it.deviceName), stringResource(R.string.pin_body, it.deviceName), it.pin, compact = state.mirroring)
+        // Someone is watching: codes appear as a notification card instead of covering the picture.
+        val pinToast = if (!state.mirroring) {
+            null
+        } else {
+            PlayerHub.airPlayPin?.let { PlayerHub.Toast("airplay-pin:$it", stringResource(R.string.airplay_pin_title), it) }
+                ?: PlayerHub.pinPrompt?.let { PlayerHub.Toast("pin:${it.pin}", stringResource(R.string.pin_title, it.deviceName), it.pin) }
         }
-        PlayerHub.airPlayPin?.let {
-            PinOverlay(stringResource(R.string.airplay_pin_title), stringResource(R.string.airplay_pin_body), it, compact = state.mirroring)
+        if (!state.mirroring) {
+            PlayerHub.pinPrompt?.let {
+                PinOverlay(stringResource(R.string.pin_title, it.deviceName), stringResource(R.string.pin_body, it.deviceName), it.pin)
+            }
+            PlayerHub.airPlayPin?.let {
+                PinOverlay(stringResource(R.string.airplay_pin_title), stringResource(R.string.airplay_pin_body), it)
+            }
         }
+        // One host for every notification, so a card keeps its animation when mirroring starts or ends.
+        ToastHost(pinToast ?: PlayerHub.toast)
         PlayerHub.approval?.let { ApprovalDialog(it) }
         PlayerHub.notice?.let { notice ->
             Box(Modifier.fillMaxSize().padding(bottom = 120.dp), contentAlignment = Alignment.BottomCenter) { Pill(notice) }
@@ -242,11 +265,7 @@ private fun IdleScreen(state: TvUiState, adUnitId: String, actions: TvActions) {
 
             Spacer(Modifier.weight(1f))
 
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-                Spacer(Modifier.weight(1f))
-                BannerAd(adUnitId, Modifier.width(320.dp), size = BannerSize.STANDARD, active = !state.mirroring)
-                Spacer(Modifier.weight(1f))
-            }
+
         }
     }
 }

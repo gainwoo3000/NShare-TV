@@ -87,6 +87,21 @@ class Timeline(private val clock: ClockSync, mode: LatencyMode, avOffsetMs: Int)
 
     val atMaxLatency: Boolean get() = latencyNs >= mode.maxMs * MS
 
+    /** Duration of one audio chunk (set by the renderer); the output must hold a couple of them. */
+    @Volatile var audioChunkNs: Long = 0
+    /** Extra room after the output ran dry; grows on underruns and fades away slowly. */
+    private var underrunCushionNs = 0L
+    private var lastUnderrunNs = 0L
+
+    /** The audio output ran dry: more latency is needed so the track always has data queued. */
+    @Synchronized
+    fun onAudioUnderrun(nowNs: Long) {
+        if (nowNs - lastUnderrunNs < 500 * MS) return
+        lastUnderrunNs = nowNs
+        underrunCushionNs = (underrunCushionNs + UNDERRUN_STEP_NS).coerceAtMost(MAX_UNDERRUN_CUSHION_NS)
+        lastUpdateNs = 0 // apply right away
+    }
+
     /** Called when a renderer cannot meet its deadlines by [deficitNs]. */
     @Synchronized
     fun requireLatencyIncrease(deficitNs: Long) {
@@ -125,8 +140,10 @@ class Timeline(private val clock: ClockSync, mode: LatencyMode, avOffsetMs: Int)
         val videoNeed = videoTransit.percentile(m.percentile)?.let {
             it + (decodeLatency.percentile(0.95) ?: 20 * MS) + vsync + m.marginMs * MS
         }
+        underrunCushionNs = (underrunCushionNs - CUSHION_DECAY_PER_UPDATE_NS).coerceAtLeast(0)
         val audioNeed = audioTransit.percentile(m.percentile)?.let {
-            it + audioOutputLatencyNs + AUDIO_DECODE_NS + m.marginMs * MS
+            // Two chunks queued in the track absorb scheduling jitter; without them it runs dry (clicks).
+            it + audioOutputLatencyNs + AUDIO_DECODE_NS + 2 * audioChunkNs + underrunCushionNs + m.marginMs * MS
         }
         val need = maxOf(videoNeed ?: 0, audioNeed ?: 0).coerceIn(m.minMs * MS, m.maxMs * MS)
         val decay = if (audioQuiet(now)) FAST_DECAY_PER_UPDATE_NS else DECAY_PER_UPDATE_NS
@@ -147,6 +164,10 @@ class Timeline(private val clock: ClockSync, mode: LatencyMode, avOffsetMs: Int)
         private const val QUIET_NS = 300 * MS
         private const val NO_AUDIO_NS = 1_000 * MS
         private const val AUDIO_DECODE_NS = 12 * MS
+        private const val UNDERRUN_STEP_NS = 15 * MS
+        private const val MAX_UNDERRUN_CUSHION_NS = 90 * MS
+        /** 0.125 ms per 250 ms = 0.5 ms/s: the cushion outlives the burst of jitter that caused it. */
+        private const val CUSHION_DECAY_PER_UPDATE_NS = 125_000L
     }
 }
 

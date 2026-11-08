@@ -62,4 +62,42 @@ class TimelineTest {
         assertEquals(3, AudioRenderer.maxAdjustFrames(480))
         assertEquals(6, AudioRenderer.maxAdjustFrames(1024))
     }
+
+    /** Video and loud audio where audio transit (150 ms) decides the latency, well above the mode minimum. */
+    private fun feedAudioBound(t: Timeline, startMs: Long, durationMs: Long): Long {
+        var now = startMs
+        while (now < startMs + durationMs) {
+            t.onVideoArrival((now - 5) * ms, now * ms)
+            t.onAudioArrival((now - 150) * ms, now * ms)
+            t.onAudioLevel(silent = false, nowNs = now * ms)
+            now += 16
+        }
+        return now
+    }
+
+    @Test
+    fun audioNeedKeepsTwoChunksQueued() {
+        val t = timeline()
+        val now = feedAudioBound(t, 10_000, 3_000)
+        val without = t.latencyNs
+        t.audioChunkNs = 21 * ms // AAC 1024 samples at 48 kHz
+        feedAudioBound(t, now, 1_000)
+        assertEquals("two chunks of room", 42L, (t.latencyNs - without) / ms)
+    }
+
+    @Test
+    fun underrunsBuyRoomThatFadesSlowly() {
+        val t = timeline()
+        t.audioChunkNs = 10 * ms
+        var now = feedAudioBound(t, 10_000, 3_000)
+        val base = t.latencyNs
+        t.onAudioUnderrun(now * ms)
+        t.onAudioUnderrun(now * ms + 100 * ms) // within 500 ms: counted once
+        now = feedAudioBound(t, now + 300, 300)
+        val raised = t.latencyNs
+        assertTrue("one step of ~15 ms, got ${(raised - base) / ms}", (raised - base) / ms in 14..15)
+        feedAudioBound(t, now, 10_000)
+        // 0.5 ms/s: after 10 s most of the room is still there.
+        assertTrue("cushion should fade slowly, got ${(t.latencyNs - base) / ms} ms", t.latencyNs - base in 8 * ms..12 * ms)
+    }
 }

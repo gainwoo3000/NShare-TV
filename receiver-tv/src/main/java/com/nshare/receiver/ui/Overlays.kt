@@ -1,6 +1,27 @@
 package com.nshare.receiver.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.res.painterResource
+import androidx.tv.material3.Icon
+import kotlinx.coroutines.flow.first
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -58,17 +79,9 @@ private fun Card(content: @Composable () -> Unit) {
     }
 }
 
-/**
- * PIN the user types on the phone (NShare pairing) or on the Apple device (AirPlay screen PIN).
- * [compact]: someone is mirroring, so show a small card in the top-right corner instead of
- * covering the picture.
- */
+/** PIN the user types on the phone (NShare pairing) or on the Apple device (AirPlay screen PIN). */
 @Composable
-fun PinOverlay(title: String, body: String, pin: String, compact: Boolean = false) {
-    if (compact) {
-        PinToast(title, pin)
-        return
-    }
+fun PinOverlay(title: String, body: String, pin: String) {
     Scrim {
         Card {
             Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
@@ -87,25 +100,79 @@ fun PinOverlay(title: String, body: String, pin: String, compact: Boolean = fals
     }
 }
 
+/**
+ * Top-right notification card: slides in from the right edge while fading in, stays for
+ * [PlayerHub.Toast.durationMs] (codes show a progress bar filling left to right over that time),
+ * then slides back out to the right while fading out. A new toast replaces the current one (the
+ * old one leaves first); a null toast dismisses it early.
+ */
 @Composable
-private fun PinToast(title: String, pin: String) {
+fun ToastHost(toast: PlayerHub.Toast?) {
+    var current by remember { mutableStateOf<PlayerHub.Toast?>(null) }
+    val visible = remember { MutableTransitionState(false) }
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(toast?.key) {
+        if (visible.targetState) {
+            visible.targetState = false
+            snapshotFlow { visible.isIdle }.first { it }
+        }
+        if (toast == null) return@LaunchedEffect
+        current = toast
+        progress.snapTo(0f)
+        visible.targetState = true
+        progress.animateTo(1f, tween(toast.durationMs, easing = LinearEasing))
+        visible.targetState = false
+    }
     Box(Modifier.fillMaxSize().padding(top = 27.dp, end = 48.dp), contentAlignment = Alignment.TopEnd) {
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            colors = SurfaceDefaults.colors(containerColor = Color(0xE61F232B), contentColor = Color.White),
-            modifier = Modifier.widthIn(max = 320.dp),
+        AnimatedVisibility(
+            visibleState = visible,
+            enter = slideInHorizontally(tween(380, easing = FastOutSlowInEasing)) { it + 120 } + fadeIn(tween(380)),
+            exit = slideOutHorizontally(tween(380, easing = FastOutSlowInEasing)) { it + 120 } + fadeOut(tween(380)),
         ) {
-            Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, color = Color(0xFFC4C6D0))
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    if (pin.length == 6) pin.chunked(3).joinToString(" ") else pin,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 32.sp,
-                    letterSpacing = 3.sp,
-                    color = Color(0xFFA8C7FA),
-                )
+            current?.let { ToastCard(it) { progress.value } }
+        }
+    }
+}
+
+@Composable
+private fun ToastCard(toast: PlayerHub.Toast, progress: () -> Float) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        colors = SurfaceDefaults.colors(containerColor = Color(0xF21F232B), contentColor = Color.White),
+        modifier = Modifier.width(320.dp),
+    ) {
+        Column {
+            Row(Modifier.padding(start = 16.dp, end = 20.dp, top = 14.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF1A73E8)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(painterResource(R.drawable.ic_cast_toast), null, Modifier.size(20.dp), tint = Color.White)
+                }
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(toast.title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
+                    toast.code?.let { code ->
+                        Text(
+                            if (code.length == 6) code.chunked(3).joinToString(" ") else code,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 30.sp,
+                            letterSpacing = 3.sp,
+                            color = Color(0xFFA8C7FA),
+                        )
+                    }
+                }
+            }
+            if (toast.showProgress) {
+                // Time left before the card goes away, filling from left to right.
+                Box(Modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = 0.12f))) {
+                    Box(
+                        Modifier.fillMaxHeight().drawBehind {
+                            drawRect(Color(0xFFA8C7FA), size = size.copy(width = this.size.width * progress()))
+                        }.fillMaxWidth(),
+                    )
+                }
             }
         }
     }

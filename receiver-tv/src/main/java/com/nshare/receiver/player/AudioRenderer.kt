@@ -98,6 +98,11 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
      * the mode allows): play every chunk late, shortened as much as allowed, instead of 1 in 9.
      */
     private var playingLate = false
+    /** Audio queued in the track, from the last [predictNextFrameTime]. */
+    private var queuedNs = 0L
+    private var lastUnderrunCount = -1
+    /** The next chunk starts after silence or a gap: ramp it in so the restart does not click. */
+    private var fadeInNext = true
     private var lastHead = -1L
     private var lastHeadMoveNs = 0L
     private var lastDebugLogNs = 0L
@@ -144,6 +149,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             channels = ch
             track.release()
             track = createTrack()
+            lastUnderrunCount = -1
             track.play()
             framesWritten = 0
             tsValid = false
@@ -167,6 +173,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             return
         }
         track = createTrack()
+        lastUnderrunCount = -1
         track.play()
         val info = MediaCodec.BufferInfo()
         try {
@@ -254,6 +261,17 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         val frameNs = 1_000_000_000L / sampleRate
 
         val chunkNs = frames * 1_000_000_000L / sampleRate
+        timeline.audioChunkNs = chunkNs
+        // Skipping or dropping while the track holds little audio makes it run dry: an audible click.
+        val canDrop = queuedNs > 2 * chunkNs + MIN_QUEUE_MARGIN_NS
+        if (errorNs > RESYNC_NS && !playingLate) {
+            // Far behind (timestamps jumped, e.g. the sender restarted its audio stream): no amount of
+            // dropping fixes that. Clear any backlog and play as audio arrives until timestamps line up.
+            Log.w(TAG, "audio ${errorNs / 1_000_000} ms late; playing as it arrives")
+            playingLate = true
+            stats.audioPlayingLate = true
+            if (queuedNs > FREE_RUN_MAX_QUEUE_NS) resetTrack()
+        }
         if (errorNs <= DROP_THRESHOLD_NS) {
             consecutiveLate = 0
             lateDropsInRow = 0
@@ -264,18 +282,22 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             }
         }
         when {
-            silent && !needsAlignment && errorNs > chunkNs -> {
+            silent && !needsAlignment && errorNs > chunkNs && canDrop -> {
                 // Behind the timeline (latency is shrinking or a spike just passed): skipping silence
                 // catches up instantly and inaudibly. Stops as soon as audio is back on its slot.
                 stats.audioSilentDropped.incrementAndGet()
                 return
             }
             errorNs > DROP_THRESHOLD_NS && playingLate -> {
-                // Shorten every chunk as much as allowed so the gap closes gradually and audibly intact.
+                // Keep the sound continuous with a short queue: drop only when audio piles up.
                 needsAlignment = false
-                write(resample(pcm, frames, frames - maxAdjustFrames(frames)))
+                if (queuedNs > FREE_RUN_MAX_QUEUE_NS) {
+                    stats.audioDropped.incrementAndGet()
+                    return
+                }
+                write(pcm)
             }
-            errorNs > DROP_THRESHOLD_NS && lateDropsInRow < MAX_LATE_DROPS_IN_ROW -> {
+            errorNs > DROP_THRESHOLD_NS && lateDropsInRow < MAX_LATE_DROPS_IN_ROW && canDrop -> {
                 // Audio would play too late: skip this chunk so the backlog drains and lip sync returns.
                 stats.audioDropped.incrementAndGet()
                 if (lateDropsInRow == 0) lateRunStartErrorNs = errorNs
@@ -290,7 +312,7 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             }
             errorNs > DROP_THRESHOLD_NS -> {
                 // Still late after a run of drops: play one chunk so sound never disappears entirely.
-                if (timeline.atMaxLatency && errorNs > lateRunStartErrorNs - LATE_PROGRESS_NS) {
+                if (lateDropsInRow >= MAX_LATE_DROPS_IN_ROW && timeline.atMaxLatency && errorNs > lateRunStartErrorNs - LATE_PROGRESS_NS) {
                     // Latency cannot grow any more and dropping made no progress: stop chopping the sound.
                     playingLate = true
                     stats.audioPlayingLate = true
@@ -300,8 +322,14 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
                 needsAlignment = false
                 write(pcm)
             }
+            errorNs < -MAX_EARLY_NS -> {
+                // Due more than a second from now: timestamps not lined up yet. Filling that much
+                // silence would push all following audio late, so skip the chunk instead.
+                stats.audioDropped.incrementAndGet()
+                return
+            }
             errorNs < -SILENCE_THRESHOLD_NS || needsAlignment && errorNs < -frameNs -> {
-                val silenceFrames = (-errorNs / frameNs).toInt()
+                val silenceFrames = (minOf(-errorNs, MAX_SILENCE_NS) / frameNs).toInt()
                 writeSilence(silenceFrames)
                 stats.audioSilenceMs.addAndGet(silenceFrames * 1000L / sampleRate)
                 needsAlignment = false
@@ -352,6 +380,14 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             levelPeak = 0
         }
         val bufferedNs = buffered * 1_000_000_000L / sampleRate
+        queuedNs = bufferedNs
+        // The platform's own count is exact (ours below only sees a completely empty queue).
+        val underruns = track.underrunCount
+        if (lastUnderrunCount in 0 until underruns) {
+            timeline.onAudioUnderrun(now)
+            fadeInNext = true
+        }
+        lastUnderrunCount = underruns
         if (tsValid && buffered > 0 && now - tsNano < 1_000_000_000L) {
             val t = tsNano + (framesWritten - tsFrame) * 1_000_000_000L / sampleRate
             val measured = t - now - bufferedNs
@@ -363,12 +399,18 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         }
         if (buffered == 0L && !needsAlignment) {
             stats.audioUnderruns.incrementAndGet()
+            timeline.onAudioUnderrun(now)
             needsAlignment = true
+            fadeInNext = true
         }
         return now + bufferedNs + outputLatencyNs
     }
 
     private fun write(pcm: ShortArray) {
+        if (fadeInNext) {
+            fadeInNext = false
+            fadeIn(pcm)
+        }
         var off = 0
         while (off < pcm.size && running) {
             val n = track.write(pcm, off, pcm.size - off, AudioTrack.WRITE_BLOCKING)
@@ -378,7 +420,32 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         framesWritten += off / channels
     }
 
+    /** Linear ramp over the first ~2 ms, so audio starting after silence or a gap does not click. */
+    private fun fadeIn(pcm: ShortArray) {
+        val rampFrames = minOf(sampleRate / 500, pcm.size / channels)
+        if (rampFrames <= 1) return
+        for (i in 0 until rampFrames) {
+            for (ch in 0 until channels) {
+                val k = i * channels + ch
+                pcm[k] = (pcm[k] * i / rampFrames).toShort()
+            }
+        }
+    }
+
+    /** Drops everything queued in the track (a backlog that can never be caught up by dropping). */
+    private fun resetTrack() {
+        track.pause()
+        track.flush()
+        track.play()
+        framesWritten = 0
+        queuedNs = 0
+        tsValid = false
+        needsAlignment = true
+        fadeInNext = true
+    }
+
     private fun writeSilence(frames: Int) {
+        fadeInNext = true
         var remaining = frames.coerceAtMost(sampleRate * 2) * channels
         val zeros = ShortArray(minOf(remaining, 4096))
         while (remaining > 0 && running) {
@@ -503,6 +570,16 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         private const val MAX_LATE_DROPS_IN_ROW = 8
         /** A run of drops must shrink the error by at least this much to count as progress. */
         private const val LATE_PROGRESS_NS = 20 * Timeline.MS
+        /** Beyond this, lateness is a timestamp jump, not a backlog: play as audio arrives. */
+        private const val RESYNC_NS = 1_000 * Timeline.MS
+        /** Chunks due further ahead than this are skipped instead of preceded by silence. */
+        private const val MAX_EARLY_NS = 1_000 * Timeline.MS
+        /** At most this much silence is inserted at once to wait for a chunk's slot. */
+        private const val MAX_SILENCE_NS = 300 * Timeline.MS
+        /** Queue kept in the track while playing as audio arrives. */
+        private const val FREE_RUN_MAX_QUEUE_NS = 120 * Timeline.MS
+        /** Besides two chunks, audio that must stay queued before skipping or dropping is allowed. */
+        private const val MIN_QUEUE_MARGIN_NS = 10 * Timeline.MS
         private const val MAX_PENDING_INPUTS = 16
     }
 }

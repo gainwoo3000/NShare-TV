@@ -121,7 +121,7 @@ fun BannerAd(adUnitId: String, modifier: Modifier = Modifier, size: BannerSize =
     if (!Ads.ready) return
     val context = LocalContext.current
     var loadedHeight by remember { mutableStateOf(0) }
-    // Failed loads are retried with backoff (30 s … 5 min) and right away after a network change.
+    // Failed loads are retried with backoff (10 s … 5 min) and right away after a network change.
     var failures by remember { mutableIntStateOf(0) }
     val adSize = remember(size) {
         when (size) {
@@ -152,7 +152,7 @@ fun BannerAd(adUnitId: String, modifier: Modifier = Modifier, size: BannerSize =
     DisposableEffect(view) { onDispose { view.destroy() } }
     LaunchedEffect(view, failures, active) {
         if (failures == 0 || !active) return@LaunchedEffect
-        delay((30_000L shl (failures - 1).coerceAtMost(4)).coerceAtMost(5 * 60_000L))
+        delay((10_000L shl (failures - 1).coerceAtMost(5)).coerceAtMost(5 * 60_000L))
         view.loadAd()
     }
     val network = Ads.networkGeneration

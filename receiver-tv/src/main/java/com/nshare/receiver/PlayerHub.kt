@@ -61,6 +61,22 @@ object PlayerHub {
     /** 4-digit code an Apple device must type (AirPlay "PIN on screen" security). */
     var airPlayPin by mutableStateOf<String?>(null)
         private set
+    /**
+     * Notification card shown in the top-right corner. Codes stay 15 s with a progress bar; plain
+     * notices (e.g. "iPhone connected") 5 s without one.
+     */
+    class Toast(
+        val key: String,
+        val title: String,
+        val code: String? = null,
+        val durationMs: Int = if (code != null) 15_000 else 5_000,
+        val showProgress: Boolean = code != null,
+    )
+
+    var toast by mutableStateOf<Toast?>(null)
+        private set
+    private var toastSeq = 0
+
     /** The NShare (Android sender) receiver could not start; shown on the idle screen. */
     var nshareUnavailable by mutableStateOf(false)
     /** Short message for the user (e.g. an outdated sender app tried to connect). */
@@ -122,6 +138,7 @@ object PlayerHub {
         val name = client.name ?: client.model ?: client.address
         Log.i(TAG, "session started: $name")
         post { setState(State.Mirroring(name, videoActive = false)) }
+        toast = Toast("connected:${++toastSeq}", context.getString(R.string.toast_connected, name))
         bringToFront(context)
         return p
     }
