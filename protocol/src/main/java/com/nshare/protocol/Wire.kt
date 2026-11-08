@@ -42,7 +42,7 @@ object Nsp {
     const val IDLE_TIMEOUT_MS = 5_000
     /** TLS + HELLO must complete within this time. */
     const val HANDSHAKE_TIMEOUT_MS = 10_000L
-    /** Time the user has to type the PIN shown on the TV. */
+    /** Absolute limit for the whole handshake once HELLO arrived (time to type the PIN shown on the TV). */
     const val PAIRING_TIMEOUT_MS = 120_000
     /** Time the TV user has to accept a second sender. */
     const val APPROVAL_TIMEOUT_MS = 10_000L
@@ -70,6 +70,8 @@ object Nsp {
         const val REJECTED = "rejected"
         const val PAIRING = "pairing"
         const val PROTOCOL = "protocol"
+        /** Another device is pairing with the receiver right now. */
+        const val BUSY = "busy"
     }
 
     const val FLAG_KEY_FRAME = 1

@@ -201,15 +201,14 @@ internal class RtspSession(
                     return
                 }
                 val clientEd = b.copyOfRange(36, 68)
-                if (server.access.mode == AirPlayAccessMode.SCREEN_PIN) {
+                // A new pair-verify starts from scratch: nothing is authorized until its signature checks out.
+                pinAuthorized = false
+                pairVerify = null
+                if (server.access.mode == AirPlayAccessMode.SCREEN_PIN && !isPaired(clientEd)) {
                     // Only Apple devices that completed PIN pairing (now or earlier) may continue.
-                    val hex = Bytes.hex(clientEd)
-                    pinAuthorized = pinPairedKey?.contentEquals(clientEd) == true || server.access.isPairedClient(hex)
-                    if (!pinAuthorized) {
-                        Log.i(TAG, "pair-verify from an unpaired device in PIN mode")
-                        res.status(470, "Connection Authorization Required")
-                        return
-                    }
+                    Log.i(TAG, "pair-verify from an unpaired device in PIN mode")
+                    res.status(470, "Connection Authorization Required")
+                    return
                 }
                 val pv = PairVerify(identity)
                 pairVerify = pv
@@ -227,6 +226,8 @@ internal class RtspSession(
                     res.disconnect = true
                     return
                 }
+                // The sender proved it holds the private key of the Ed25519 key it presented.
+                if (server.access.mode == AirPlayAccessMode.SCREEN_PIN) pinAuthorized = isPaired(pv.clientPublicKey)
                 res.body(OCTET, ByteArray(0))
             }
         }
@@ -239,6 +240,9 @@ internal class RtspSession(
     private var pinAuthorized = false
     private var digestNonce: String? = null
     private var passwordOk = false
+
+    private fun isPaired(clientEd: ByteArray?): Boolean =
+        clientEd != null && (pinPairedKey?.contentEquals(clientEd) == true || server.access.isPairedClient(Bytes.hex(clientEd)))
 
     private fun handlePairPinStart(res: RtspResponse) {
         // A repeated request while the code is on screen keeps the same code.
@@ -309,7 +313,8 @@ internal class RtspSession(
         when (server.access.mode) {
             AirPlayAccessMode.OPEN -> return true
             AirPlayAccessMode.SCREEN_PIN -> {
-                if (pinAuthorized) return true
+                // Both: a paired key, and a completed pair-verify proving possession of it.
+                if (pinAuthorized && pairVerify?.verified == true) return true
                 res.status(470, "Connection Authorization Required")
                 return false
             }
@@ -414,6 +419,8 @@ internal class RtspSession(
             name = body.string("name"),
             model = body.string("model"),
             deviceId = body.string("deviceID"),
+            // Only a key proven in pair-verify identifies the device; deviceID is self-reported.
+            verifiedKey = pairVerify?.takeIf { it.verified }?.clientPublicKey?.let(Bytes::hex),
         )
         client = info
         Log.i(TAG, "session from ${info.name} (${info.model}) at $remoteAddress, timing=${body.string("timingProtocol")}")

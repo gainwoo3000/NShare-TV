@@ -76,4 +76,6 @@
     <string name="settings_tv_name">TV 이름</string>
     <string name="settings_tv_name_desc">휴대폰과 Apple 기기에 보이는 이름입니다</string>
     <string name="settings_tv_name_hint">휴대폰과 Apple 기기에 보이는 이름입니다. 비워 두면 기본 이름(%1$s)을 씁니다.</string>
+    <string name="stats_audio_late">      ⚠ 이 모드의 최대 지연으로도 소리가 늦습니다. ▲▼로 균형 모드를 써 보세요.</string>
+    <string name="nshare_unavailable">NShare 수신기를 시작하지 못해 Android 휴대폰은 연결할 수 없습니다. 앱을 다시 시작하세요.</string>
 </resources>

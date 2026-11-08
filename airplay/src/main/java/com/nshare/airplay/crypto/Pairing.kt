@@ -49,6 +49,9 @@ class PairVerify(private val identity: Identity) {
     var verified = false
         private set
 
+    /** Ed25519 key the sender presented (proven once [verified]). */
+    val clientPublicKey: ByteArray? get() = theirEd
+
     /** Returns ourEcdhPublic (32) || encryptedSignature (64). */
     fun handshake(clientEcdh: ByteArray, clientEd: ByteArray): ByteArray {
         X25519.generatePrivateKey(SecureRandom(), ecdhSecret)

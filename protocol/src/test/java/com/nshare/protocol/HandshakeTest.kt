@@ -4,7 +4,6 @@ import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -51,8 +50,16 @@ class HandshakeTest {
         val fp get() = NspTls.fingerprint(cert)
     }
 
-    private class TvPolicy(override val pinPairing: Boolean, val approveResult: Boolean = true, val mirroring: Boolean = false) : ServerPolicy {
+    private class TvPolicy(
+        override val pinPairing: Boolean,
+        val approveResult: Boolean = true,
+        val mirroring: Boolean = false,
+        val pairingFree: Boolean = true,
+    ) : ServerPolicy {
         val trusted = mutableSetOf<String>()
+        var pairingEnded = false
+        override fun beginPairing() = pairingFree
+        override fun endPairing() { pairingEnded = true }
         @Volatile var shownPin: String? = null
         override fun isTrusted(fingerprintHex: String) = fingerprintHex in trusted
         override fun trust(fingerprintHex: String, deviceName: String) { trusted += fingerprintHex }
@@ -77,13 +84,27 @@ class HandshakeTest {
     private val phone = Identity("NShare Phone")
     private val caps = Caps("NShare-TEST", 3840, 2160, 60, hevc = true)
 
-    private fun connect(tvPolicy: TvPolicy, phonePolicy: PhonePolicy, phoneVersion: Int = Nsp.VERSION, pinFromTv: Boolean = false): Result {
+    private fun connect(
+        tvPolicy: TvPolicy,
+        phonePolicy: PhonePolicy,
+        phoneVersion: Int = Nsp.VERSION,
+        pinFromTv: Boolean = false,
+        tls12Only: Boolean = false,
+        peek: Boolean = false,
+    ): Result {
         val pool = Executors.newFixedThreadPool(2)
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { ss ->
             val serverCtx = NspTls.context(tv.keyManagers, PinningTrustManager { true })
             val server = pool.submit<Pair<Hello?, Exception?>> {
                 ss.accept().use { plain ->
-                    val s = NspTls.server(serverCtx, plain)
+                    val s = if (peek) {
+                        // Like the TV: read the first bytes to recognise a v1 sender, then start TLS.
+                        val first = ByteArray(2).also { DataInputStream(plain.getInputStream()).readFully(it) }
+                        NspTls.server(serverCtx, plain, first)
+                    } else {
+                        NspTls.server(serverCtx, plain)
+                    }
+                    if (tls12Only) s.enabledProtocols = arrayOf("TLSv1.2") // like an Android 8/9 TV
                     try {
                         s.startHandshake()
                         val hs = ServerHandshake(reader(s), writer(s), caps, tvPolicy, tv.fp, NspTls.peerFingerprint(s))
@@ -99,7 +120,8 @@ class HandshakeTest {
                     val s = NspTls.client(clientCtx, plain)
                     try {
                         s.startHandshake()
-                        assertEquals(NspTls.PROTOCOL, s.session.protocol)
+                        assertEquals(if (tls12Only) "TLSv1.2" else "TLSv1.3", s.session.protocol)
+                        if (tls12Only) assertTrue(s.session.cipherSuite, s.session.cipherSuite.startsWith("TLS_ECDHE_ECDSA_WITH_"))
                         val policy = if (pinFromTv) object : ClientPolicy by phonePolicy {
                             override fun requestPin(retry: Boolean): String? {
                                 phonePolicy.asked++
@@ -191,13 +213,82 @@ class HandshakeTest {
     }
 
     @Test
-    fun pinProofsBindBothDirections() {
-        val n1 = PinProof.newNonce()
-        val n2 = PinProof.newNonce()
-        val c = PinProof.client("123456", tv.fp, phone.fp, n1, n2)
-        val s = PinProof.server("123456", tv.fp, phone.fp, n1, n2)
-        assertFalse(PinProof.matches(c, s))
-        assertArrayEquals(c, PinProof.client("123456", tv.fp, phone.fp, n1, n2))
-        assertFalse(PinProof.matches(c, PinProof.client("123457", tv.fp, phone.fp, n1, n2)))
+    fun declinedDeviceIsNotTrusted() {
+        // Trust on first use, but the TV user declines the takeover: the device must not be remembered.
+        val tvPolicy = TvPolicy(pinPairing = false, approveResult = false, mirroring = true)
+        val r = connect(tvPolicy, PhonePolicy(emptyList()))
+        assertEquals(Nsp.Error.REJECTED, (r.clientError as NspRefusedException).code)
+        assertFalse(NspTls.hex(phone.fp) in tvPolicy.trusted)
+    }
+
+    @Test
+    fun pairedButDeclinedIsTrustedOnNeitherSide() {
+        val tvPolicy = TvPolicy(pinPairing = true, approveResult = false, mirroring = true)
+        val phonePolicy = PhonePolicy(emptyList())
+        val r = connect(tvPolicy, phonePolicy, pinFromTv = true)
+        assertEquals(Nsp.Error.REJECTED, (r.clientError as NspRefusedException).code)
+        assertFalse(NspTls.hex(phone.fp) in tvPolicy.trusted)
+        assertEquals(null, phonePolicy.trustedTv)
+    }
+
+    @Test
+    fun secondPairingIsRefusedWhileOneIsInProgress() {
+        val tvPolicy = TvPolicy(pinPairing = true, pairingFree = false)
+        val r = connect(tvPolicy, PhonePolicy(listOf("123456")))
+        assertEquals(Nsp.Error.BUSY, (r.clientError as NspRefusedException).code)
+        assertFalse("must not release a slot it never took", tvPolicy.pairingEnded)
+    }
+
+    @Test
+    fun pairingReleasesTheSlot() {
+        val tvPolicy = TvPolicy(pinPairing = true)
+        connect(tvPolicy, PhonePolicy(emptyList()), pinFromTv = true)
+        assertTrue(tvPolicy.pairingEnded)
+    }
+
+    @Test
+    fun tlsAfterPeekingAtTheFirstBytes() {
+        val r = connect(TvPolicy(pinPairing = false), PhonePolicy(emptyList()), peek = true)
+        assertTrue("client: ${r.clientError} server: ${r.serverError}", r.caps != null)
+    }
+
+    @Test
+    fun tls12FallbackForOldTvs() {
+        val r = connect(TvPolicy(pinPairing = false), PhonePolicy(emptyList()), tls12Only = true)
+        assertTrue("client: ${r.clientError}", r.caps != null)
+    }
+
+    @Test
+    fun srpAcceptsTheRightPinOnly() {
+        val id = Srp.identity(tv.fp, phone.fp)
+        val server = Srp.Server(id, "123456")
+        val good = Srp.Client(id, "123456")
+        val m2 = server.verify(good.publicKey, good.proof(server.salt, server.publicKey)!!)
+        assertTrue(m2 != null && good.verifyServer(m2))
+
+        val server2 = Srp.Server(id, "123456")
+        val bad = Srp.Client(id, "123457")
+        assertEquals(null, server2.verify(bad.publicKey, bad.proof(server2.salt, server2.publicKey)!!))
+    }
+
+    @Test
+    fun srpFailsThroughARelayingMiddleman() {
+        // A man in the middle terminates TLS with its own certificate on each side and relays the
+        // pairing messages. The user types the right PIN, yet the TV sees (tv, mitm) and the phone
+        // sees (mitm, phone), so the identities differ and no proof matches.
+        val mitm = Identity("Attacker")
+        val server = Srp.Server(Srp.identity(tv.fp, mitm.fp), "123456")
+        val client = Srp.Client(Srp.identity(mitm.fp, phone.fp), "123456")
+        val m1 = client.proof(server.salt, server.publicKey)!!
+        assertEquals(null, server.verify(client.publicKey, m1))
+    }
+
+    @Test
+    fun srpRejectsDegeneratePublicValues() {
+        val id = Srp.identity(tv.fp, phone.fp)
+        val server = Srp.Server(id, "123456")
+        assertEquals(null, server.verify(ByteArray(1), ByteArray(32)))
+        assertEquals(null, server.verify(Srp.N.toByteArray(), ByteArray(32)))
+        assertEquals(null, Srp.Client(id, "123456").proof(server.salt, ByteArray(1)))
     }
 }

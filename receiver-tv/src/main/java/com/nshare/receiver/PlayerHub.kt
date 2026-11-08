@@ -61,6 +61,8 @@ object PlayerHub {
     /** 4-digit code an Apple device must type (AirPlay "PIN on screen" security). */
     var airPlayPin by mutableStateOf<String?>(null)
         private set
+    /** The NShare (Android sender) receiver could not start; shown on the idle screen. */
+    var nshareUnavailable by mutableStateOf(false)
     /** Short message for the user (e.g. an outdated sender app tried to connect). */
     var notice by mutableStateOf<String?>(null)
         private set
@@ -179,7 +181,8 @@ object PlayerHub {
 
     fun showPin(pin: String, deviceName: String) {
         pinPrompt = PinPrompt(pin, deviceName)
-        bringToFrontFromBackground()
+        // While mirroring the receiver is already in front and shows the PIN as a small card.
+        if (player == null) bringToFrontFromBackground()
     }
 
     fun hidePin() {
@@ -188,7 +191,7 @@ object PlayerHub {
 
     fun showAirPlayPin(pin: String?) {
         airPlayPin = pin
-        if (pin != null) bringToFrontFromBackground()
+        if (pin != null && player == null) bringToFrontFromBackground()
     }
 
     /**
@@ -206,7 +209,14 @@ object PlayerHub {
             allowed = ok
             latch.countDown()
         }
-        approval = req
+        synchronized(this) {
+            // One question at a time: a second request must not replace (and silently time out) the first.
+            if (approval != null) {
+                Log.i(TAG, "takeover by $deviceName refused: another request is pending")
+                return false
+            }
+            approval = req
+        }
         val answered = latch.await(Nsp.APPROVAL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         if (approval === req) approval = null
         Log.i(TAG, "takeover by $deviceName ${if (answered && allowed) "allowed" else "refused"}")

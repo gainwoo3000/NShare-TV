@@ -1,38 +1,14 @@
 package com.nshare.protocol
 
 import java.io.IOException
-import java.security.MessageDigest
 import java.security.SecureRandom
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 /** The peer refused the session (ERROR frame) or the handshake broke its rules. */
 class NspRefusedException(val code: String, message: String) : IOException(message)
 
-/** HMAC proofs for PIN pairing; both directions bind both certificates and both nonces. */
-object PinProof {
-    private const val CLIENT = "NSP2-PAIR-CLIENT"
-    private const val SERVER = "NSP2-PAIR-SERVER"
-
+/** PIN shown on the TV for pairing; checked with SRP-6a ([Srp]), never sent over the network. */
+object Pin {
     fun newPin(): String = "%06d".format(SecureRandom().nextInt(1_000_000))
-
-    fun newNonce(): ByteArray = ByteArray(16).also { SecureRandom().nextBytes(it) }
-
-    fun client(pin: String, tvFp: ByteArray, phoneFp: ByteArray, tvNonce: ByteArray, phoneNonce: ByteArray) =
-        mac(CLIENT, pin, tvFp, phoneFp, tvNonce, phoneNonce)
-
-    fun server(pin: String, tvFp: ByteArray, phoneFp: ByteArray, tvNonce: ByteArray, phoneNonce: ByteArray) =
-        mac(SERVER, pin, tvFp, phoneFp, tvNonce, phoneNonce)
-
-    fun matches(a: ByteArray, b: ByteArray) = MessageDigest.isEqual(a, b)
-
-    private fun mac(label: String, pin: String, vararg parts: ByteArray): ByteArray {
-        val m = Mac.getInstance("HmacSHA256")
-        m.init(SecretKeySpec(pin.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        m.update(label.toByteArray(Charsets.UTF_8))
-        for (p in parts) m.update(p)
-        return m.doFinal()
-    }
 }
 
 private fun FrameWriter.error(code: String, message: String) =
@@ -50,6 +26,9 @@ interface ServerPolicy {
     val pinPairing: Boolean
     fun isTrusted(fingerprintHex: String): Boolean
     fun trust(fingerprintHex: String, deviceName: String)
+    /** Claims the receiver's single pairing slot; false while another device is pairing. */
+    fun beginPairing(): Boolean = true
+    fun endPairing() {}
     fun showPin(pin: String, deviceName: String)
     fun hidePin()
     /** Returns false to refuse (e.g. the TV user declined a second sender). */
@@ -87,43 +66,51 @@ class ServerHandshake(
         }
         onHello(hello)
         val fp = NspTls.hex(clientFp)
-        if (!policy.isTrusted(fp)) {
-            if (policy.pinPairing) pair(hello) else policy.trust(fp, hello.deviceName) // trust on first use
-        }
+        val newDevice = !policy.isTrusted(fp)
+        if (newDevice && policy.pinPairing) pair(hello)
         if (policy.needsApproval()) writer.write(Nsp.Type.WAIT_APPROVAL)
         if (!policy.approve(hello.deviceName, fp)) {
             writer.error(Nsp.Error.REJECTED, "declined on the TV")
             throw NspRefusedException(Nsp.Error.REJECTED, "declined")
         }
+        // Remember a new device (PIN pairing or trust on first use) only once it is fully admitted:
+        // a sender the TV user declined must not end up trusted.
+        if (newDevice) policy.trust(fp, hello.deviceName)
         writer.write(Nsp.Type.CAPS, payload = caps.encode())
         return hello
     }
 
     private fun pair(hello: Hello) {
-        val pin = PinProof.newPin()
-        val tvNonce = PinProof.newNonce()
-        writer.write(Nsp.Type.PAIR_REQUIRED, payload = KeyValues.encode(mapOf("nonce" to NspTls.hex(tvNonce))))
-        policy.showPin(pin, hello.deviceName)
+        if (!policy.beginPairing()) {
+            writer.error(Nsp.Error.BUSY, "another device is pairing with this TV")
+            throw NspRefusedException(Nsp.Error.BUSY, "pairing busy")
+        }
         try {
+            val pin = Pin.newPin()
+            val identity = Srp.identity(serverFp, clientFp)
+            policy.showPin(pin, hello.deviceName)
             while (true) {
+                // Fresh SRP values for every attempt; the PIN on screen stays the same.
+                val srp = Srp.Server(identity, pin)
+                writer.write(
+                    Nsp.Type.PAIR_REQUIRED,
+                    payload = KeyValues.encode(mapOf("salt" to NspTls.hex(srp.salt), "pk" to NspTls.hex(srp.publicKey))),
+                )
                 val f = reader.read(Nsp.MAX_HANDSHAKE_PAYLOAD)
                 f.errorOrNull()?.let { throw it }
                 if (f.type != Nsp.Type.PAIR_PROOF) throw NspRefusedException(Nsp.Error.PROTOCOL, "expected PAIR_PROOF")
                 val kv = KeyValues.decode(f.payload)
-                val phoneNonce = NspTls.unhex(kv["nonce"] ?: "")
-                val proof = NspTls.unhex(kv["mac"] ?: "")
-                val expected = PinProof.client(pin, serverFp, clientFp, tvNonce, phoneNonce)
-                if (PinProof.matches(proof, expected)) {
-                    val mine = PinProof.server(pin, serverFp, clientFp, tvNonce, phoneNonce)
-                    writer.write(Nsp.Type.PAIR_RESULT, payload = KeyValues.encode(mapOf("ok" to "1", "mac" to NspTls.hex(mine))))
-                    policy.trust(NspTls.hex(clientFp), hello.deviceName)
+                val serverProof = srp.verify(NspTls.unhex(kv["pk"] ?: ""), NspTls.unhex(kv["proof"] ?: ""))
+                if (serverProof != null) {
+                    writer.write(Nsp.Type.PAIR_RESULT, payload = KeyValues.encode(mapOf("ok" to "1", "proof" to NspTls.hex(serverProof))))
                     return
                 }
-                // Wrong PIN: the sender may try again with the same PIN.
+                // Wrong PIN (or a relayed exchange): the sender may try again.
                 writer.write(Nsp.Type.PAIR_RESULT, payload = KeyValues.encode(mapOf("ok" to "0")))
             }
         } finally {
             policy.hidePin()
+            policy.endPairing()
         }
     }
 }
@@ -152,12 +139,17 @@ class ClientHandshake(
 
     fun run(): Caps {
         writer.write(Nsp.Type.HELLO, payload = hello.encode())
+        var retry = false
         while (true) {
             val f = reader.read(Nsp.MAX_HANDSHAKE_PAYLOAD)
             f.errorOrNull()?.let { throw it }
             when (f.type) {
-                Nsp.Type.CAPS -> return Caps.decode(f.payload)
-                Nsp.Type.PAIR_REQUIRED -> pair(NspTls.unhex(KeyValues.decode(f.payload)["nonce"] ?: ""))
+                Nsp.Type.CAPS -> {
+                    // Like the TV, remember the receiver only once it actually admitted us.
+                    if (paired) policy.trustReceiver(NspTls.hex(serverFp))
+                    return Caps.decode(f.payload)
+                }
+                Nsp.Type.PAIR_REQUIRED -> if (!pair(KeyValues.decode(f.payload), retry)) retry = true
                 Nsp.Type.WAIT_APPROVAL -> policy.onWaitingForApproval()
                 Nsp.Type.PING -> Unit
                 else -> throw NspRefusedException(Nsp.Error.PROTOCOL, "unexpected frame ${f.type} in handshake")
@@ -165,36 +157,30 @@ class ClientHandshake(
         }
     }
 
-    private fun pair(tvNonce: ByteArray) {
-        var retry = false
-        while (true) {
-            val pin = policy.requestPin(retry)
-            if (pin == null) {
-                writer.error(Nsp.Error.PAIRING, "cancelled")
-                throw NspRefusedException(Nsp.Error.PAIRING, "pairing cancelled")
-            }
-            val phoneNonce = PinProof.newNonce()
-            val mac = PinProof.client(pin, serverFp, clientFp, tvNonce, phoneNonce)
-            writer.write(
-                Nsp.Type.PAIR_PROOF,
-                payload = KeyValues.encode(mapOf("nonce" to NspTls.hex(phoneNonce), "mac" to NspTls.hex(mac))),
-            )
-            val r = reader.read(Nsp.MAX_HANDSHAKE_PAYLOAD)
-            r.errorOrNull()?.let { throw it }
-            if (r.type != Nsp.Type.PAIR_RESULT) throw NspRefusedException(Nsp.Error.PROTOCOL, "expected PAIR_RESULT")
-            val kv = KeyValues.decode(r.payload)
-            if (kv["ok"] != "1") {
-                retry = true
-                continue
-            }
-            // The TV must prove the same PIN, otherwise we are talking to an impostor.
-            val expected = PinProof.server(pin, serverFp, clientFp, tvNonce, phoneNonce)
-            if (!PinProof.matches(NspTls.unhex(kv["mac"] ?: ""), expected)) {
-                throw NspRefusedException(Nsp.Error.PAIRING, "receiver failed to prove the PIN")
-            }
-            policy.trustReceiver(NspTls.hex(serverFp))
-            paired = true
-            return
+    /** One SRP attempt; returns false after a wrong PIN (the TV then sends a new PAIR_REQUIRED). */
+    private fun pair(challenge: Map<String, String>, retry: Boolean): Boolean {
+        val pin = policy.requestPin(retry)
+        if (pin == null) {
+            writer.error(Nsp.Error.PAIRING, "cancelled")
+            throw NspRefusedException(Nsp.Error.PAIRING, "pairing cancelled")
         }
+        val srp = Srp.Client(Srp.identity(serverFp, clientFp), pin)
+        val proof = srp.proof(NspTls.unhex(challenge["salt"] ?: ""), NspTls.unhex(challenge["pk"] ?: ""))
+            ?: throw NspRefusedException(Nsp.Error.PROTOCOL, "invalid pairing challenge")
+        writer.write(
+            Nsp.Type.PAIR_PROOF,
+            payload = KeyValues.encode(mapOf("pk" to NspTls.hex(srp.publicKey), "proof" to NspTls.hex(proof))),
+        )
+        val r = reader.read(Nsp.MAX_HANDSHAKE_PAYLOAD)
+        r.errorOrNull()?.let { throw it }
+        if (r.type != Nsp.Type.PAIR_RESULT) throw NspRefusedException(Nsp.Error.PROTOCOL, "expected PAIR_RESULT")
+        val kv = KeyValues.decode(r.payload)
+        if (kv["ok"] != "1") return false
+        // The TV must prove the same PIN for the same pair of certificates, otherwise it is an impostor.
+        if (!srp.verifyServer(NspTls.unhex(kv["proof"] ?: ""))) {
+            throw NspRefusedException(Nsp.Error.PAIRING, "receiver failed to prove the PIN")
+        }
+        paired = true
+        return true
     }
 }

@@ -58,9 +58,17 @@ private fun Card(content: @Composable () -> Unit) {
     }
 }
 
-/** PIN the user types on the phone (NShare pairing) or on the Apple device (AirPlay screen PIN). */
+/**
+ * PIN the user types on the phone (NShare pairing) or on the Apple device (AirPlay screen PIN).
+ * [compact]: someone is mirroring, so show a small card in the top-right corner instead of
+ * covering the picture.
+ */
 @Composable
-fun PinOverlay(title: String, body: String, pin: String) {
+fun PinOverlay(title: String, body: String, pin: String, compact: Boolean = false) {
+    if (compact) {
+        PinToast(title, pin)
+        return
+    }
     Scrim {
         Card {
             Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
@@ -75,6 +83,30 @@ fun PinOverlay(title: String, body: String, pin: String) {
                 letterSpacing = 6.sp,
                 color = Color(0xFFA8C7FA),
             )
+        }
+    }
+}
+
+@Composable
+private fun PinToast(title: String, pin: String) {
+    Box(Modifier.fillMaxSize().padding(top = 27.dp, end = 48.dp), contentAlignment = Alignment.TopEnd) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            colors = SurfaceDefaults.colors(containerColor = Color(0xE61F232B), contentColor = Color.White),
+            modifier = Modifier.widthIn(max = 320.dp),
+        ) {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, color = Color(0xFFC4C6D0))
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (pin.length == 6) pin.chunked(3).joinToString(" ") else pin,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 32.sp,
+                    letterSpacing = 3.sp,
+                    color = Color(0xFFA8C7FA),
+                )
+            }
         }
     }
 }

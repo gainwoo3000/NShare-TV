@@ -80,4 +80,6 @@
     <string name="settings_tv_name">TV name</string>
     <string name="settings_tv_name_desc">Shown on phones and Apple devices</string>
     <string name="settings_tv_name_hint">Shown on phones and Apple devices. Leave empty to use the default name (%1$s).</string>
+    <string name="stats_audio_late">      ⚠ Sound is late even at the highest delay of this mode. Try ▲▼ Balanced.</string>
+    <string name="nshare_unavailable">Android phones can\'t connect: the NShare receiver failed to start. Restart the app.</string>
 </resources>

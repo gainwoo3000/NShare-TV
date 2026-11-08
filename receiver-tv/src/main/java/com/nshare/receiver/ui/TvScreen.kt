@@ -127,14 +127,19 @@ fun TvScreen(state: TvUiState, adUnitId: String, surfaceCallback: SurfaceHolder.
         state.stats?.let { if (!state.settingsOpen) StatsPanel(it, belowTopBar = !state.mirroring) }
 
         PlayerHub.pinPrompt?.let {
-            PinOverlay(stringResource(R.string.pin_title, it.deviceName), stringResource(R.string.pin_body, it.deviceName), it.pin)
+            PinOverlay(stringResource(R.string.pin_title, it.deviceName), stringResource(R.string.pin_body, it.deviceName), it.pin, compact = state.mirroring)
         }
         PlayerHub.airPlayPin?.let {
-            PinOverlay(stringResource(R.string.airplay_pin_title), stringResource(R.string.airplay_pin_body), it)
+            PinOverlay(stringResource(R.string.airplay_pin_title), stringResource(R.string.airplay_pin_body), it, compact = state.mirroring)
         }
         PlayerHub.approval?.let { ApprovalDialog(it) }
         PlayerHub.notice?.let { notice ->
             Box(Modifier.fillMaxSize().padding(bottom = 120.dp), contentAlignment = Alignment.BottomCenter) { Pill(notice) }
+        }
+        if (!state.mirroring && !state.settingsOpen && PlayerHub.nshareUnavailable) {
+            Box(Modifier.fillMaxSize().padding(bottom = 120.dp), contentAlignment = Alignment.BottomCenter) {
+                Pill(stringResource(R.string.nshare_unavailable))
+            }
         }
 
         state.hint?.let { hint ->

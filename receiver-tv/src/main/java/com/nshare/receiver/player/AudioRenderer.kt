@@ -91,6 +91,13 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
     private var outputsLogged = 0
     private var consecutiveLate = 0
     private var lateDropsInRow = 0
+    /** Error when the current run of late drops started, to tell whether dropping helps. */
+    private var lateRunStartErrorNs = 0L
+    /**
+     * Dropping did not reduce the error at maximum latency (e.g. the output path is slower than
+     * the mode allows): play every chunk late, shortened as much as allowed, instead of 1 in 9.
+     */
+    private var playingLate = false
     private var lastHead = -1L
     private var lastHeadMoveNs = 0L
     private var lastDebugLogNs = 0L
@@ -250,6 +257,11 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         if (errorNs <= DROP_THRESHOLD_NS) {
             consecutiveLate = 0
             lateDropsInRow = 0
+            if (playingLate) {
+                playingLate = false
+                stats.audioPlayingLate = false
+                Log.i(TAG, "audio back on time")
+            }
         }
         when {
             silent && !needsAlignment && errorNs > chunkNs -> {
@@ -258,9 +270,15 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
                 stats.audioSilentDropped.incrementAndGet()
                 return
             }
+            errorNs > DROP_THRESHOLD_NS && playingLate -> {
+                // Shorten every chunk as much as allowed so the gap closes gradually and audibly intact.
+                needsAlignment = false
+                write(resample(pcm, frames, frames - maxAdjustFrames(frames)))
+            }
             errorNs > DROP_THRESHOLD_NS && lateDropsInRow < MAX_LATE_DROPS_IN_ROW -> {
                 // Audio would play too late: skip this chunk so the backlog drains and lip sync returns.
                 stats.audioDropped.incrementAndGet()
+                if (lateDropsInRow == 0) lateRunStartErrorNs = errorNs
                 lateDropsInRow++
                 if (!timeline.atMaxLatency && ++consecutiveLate >= 3) {
                     // The output pipeline is slower than the timeline allows: make room for it.
@@ -272,6 +290,12 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
             }
             errorNs > DROP_THRESHOLD_NS -> {
                 // Still late after a run of drops: play one chunk so sound never disappears entirely.
+                if (timeline.atMaxLatency && errorNs > lateRunStartErrorNs - LATE_PROGRESS_NS) {
+                    // Latency cannot grow any more and dropping made no progress: stop chopping the sound.
+                    playingLate = true
+                    stats.audioPlayingLate = true
+                    Log.w(TAG, "audio ${errorNs / 1_000_000} ms late at max latency; playing late instead of dropping")
+                }
                 lateDropsInRow = 0
                 needsAlignment = false
                 write(pcm)
@@ -477,6 +501,8 @@ class AudioRenderer(private val timeline: Timeline, private val stats: Stats) {
         /** Peak below -60 dBFS counts as silence (whispers and quiet backgrounds are far above this). */
         const val SILENT_PEAK = 33
         private const val MAX_LATE_DROPS_IN_ROW = 8
+        /** A run of drops must shrink the error by at least this much to count as progress. */
+        private const val LATE_PROGRESS_NS = 20 * Timeline.MS
         private const val MAX_PENDING_INPUTS = 16
     }
 }

@@ -24,6 +24,8 @@ class Stats {
     @Volatile var audioSyncErrorMs = 0.0
     /** AudioTrack performance mode actually granted ("low-latency" / "default"). */
     @Volatile var audioPerfMode = "-"
+    /** Audio is behind even at maximum latency and plays late instead of being dropped. */
+    @Volatile var audioPlayingLate = false
 
     private var lastSnapshotNs = System.nanoTime()
     private var lastRendered = 0L

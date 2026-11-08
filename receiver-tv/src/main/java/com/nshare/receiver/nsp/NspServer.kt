@@ -57,6 +57,11 @@ class NspServer(private val context: Context, private val caps: Caps) {
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private var registration: NsdManager.RegistrationListener? = null
     private val pendingHandshakes = AtomicInteger()
+    /** Only one device may pair at a time, so PIN prompts never overwrite each other. */
+    private val pairing = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** Whether the platform can start TLS after we peeked at the first bytes (see [Session.run]). */
+    @Volatile private var peekSupported = true
+    private var lastOldSenderNoticeMs = 0L
     private val scheduler = Executors.newScheduledThreadPool(2) { r -> Thread(r, "nsp-timer").apply { isDaemon = true } }
     private val security = SecuritySettings(context)
     private val trusted = TrustedDevices(context)
@@ -94,6 +99,7 @@ class NspServer(private val context: Context, private val caps: Caps) {
         registration = null
         runCatching { server?.close() }
         server = null
+        scheduler.shutdownNow()
     }
 
     private fun register(port: Int) {
@@ -131,7 +137,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 if (running) Log.e(TAG, "accept failed", e)
                 break
             }
-            // Unauthenticated peers get a bounded share of the receiver: at most 4 handshakes at once.
+            // Unidentified peers get a bounded share of the receiver. Known devices leave this pool as
+            // soon as TLS shows who they are, so strangers cannot lock them out.
             if (pendingHandshakes.get() >= MAX_PENDING_HANDSHAKES) {
                 Log.w(TAG, "too many pending handshakes, refusing ${s.inetAddress.hostAddress}")
                 runCatching { s.close() }
@@ -155,6 +162,7 @@ class NspServer(private val context: Context, private val caps: Caps) {
         private var parameterSets = ByteArray(0)
         private var handshakePending = true
         @Volatile private var goodbye = false
+        @Volatile private var established = false
         @Volatile private var writer: FrameWriter? = null
 
         private fun handshakeDone() {
@@ -166,31 +174,24 @@ class NspServer(private val context: Context, private val caps: Caps) {
 
         fun run() {
             val address = plain.inetAddress.hostAddress ?: "?"
-            // TLS + HELLO must finish within 10 s however slowly the peer trickles bytes; PIN
-            // pairing gets its own, longer limit once HELLO arrived.
-            var deadline: ScheduledFuture<*>? = scheduler.schedule({
-                if (handshakePending) {
-                    Log.w(TAG, "handshake from $address timed out")
-                    close()
-                }
-            }, Nsp.HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            var established = false
+            // TLS + HELLO must finish within 10 s however slowly the peer trickles bytes; after
+            // HELLO the whole rest of the handshake (PIN entry, approval) has an absolute limit.
+            var deadline: ScheduledFuture<*>? = scheduleDeadline(address, Nsp.HANDSHAKE_TIMEOUT_MS)
             try {
                 plain.tcpNoDelay = true
                 plain.keepAlive = true
                 plain.soTimeout = Nsp.HANDSHAKE_TIMEOUT_MS.toInt()
-                val ssl = NspTls.server(tls, plain)
+                val ssl = startTls(address) ?: return
                 socket = ssl
                 try {
                     ssl.startHandshake()
                 } catch (e: SSLException) {
-                    // Version 1 senders speak plain TCP ("NS" magic) and fail here.
                     Log.w(TAG, "TLS handshake with $address failed: ${e.message}")
-                    PlayerHub.showNotice(context.getString(R.string.notice_old_sender))
                     return
                 }
                 val peerFp = NspTls.peerFingerprint(ssl)
                 val key = NspTls.hex(peerFp)
+                if (trusted.isTrusted(key)) handshakeDone() // a known device: no longer counts as a stranger
                 val reader = FrameReader(DataInputStream(BufferedInputStream(ssl.inputStream, 512 * 1024)))
                 val writer = FrameWriter(DataOutputStream(BufferedOutputStream(ssl.outputStream, 64 * 1024)))
                 this.writer = writer
@@ -198,7 +199,7 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 val handshake = ServerHandshake(reader, writer, caps, Policy(key), deviceKey.fingerprint, peerFp)
                 handshake.onHello = {
                     deadline?.cancel(false)
-                    deadline = null
+                    deadline = scheduleDeadline(address, Nsp.PAIRING_TIMEOUT_MS.toLong())
                     ssl.soTimeout = Nsp.PAIRING_TIMEOUT_MS
                 }
                 val hello = try {
@@ -208,6 +209,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
                     if (e.code == Nsp.Error.VERSION) PlayerHub.showNotice(context.getString(R.string.notice_old_sender))
                     return
                 }
+                deadline?.cancel(false)
+                deadline = null
                 handshakeDone()
                 established = true
                 Log.i(TAG, "sender ${hello.deviceName} (${hello.model}) at $address, key ${key.take(16)}")
@@ -217,12 +220,12 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 // video thread never blocks on the socket.
                 val ctl = Executors.newSingleThreadExecutor()
                 control = ctl
-                val requestKeyFrame: () -> Unit = {
-                    ctl.execute { runCatching { writer.write(Nsp.Type.KEYFRAME_REQUEST) } }
+                // Called from the video thread, possibly right after this session ended: never throw.
+                val send: (Int) -> Unit = { type ->
+                    if (!ctl.isShutdown) runCatching { ctl.execute { runCatching { writer.write(type) } } }
                 }
-                pinger = scheduler.scheduleWithFixedDelay({
-                    ctl.execute { runCatching { writer.write(Nsp.Type.PING) } }
-                }, Nsp.PING_INTERVAL_MS, Nsp.PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
+                val requestKeyFrame: () -> Unit = { send(Nsp.Type.KEYFRAME_REQUEST) }
+                pinger = scheduler.scheduleWithFixedDelay({ send(Nsp.Type.PING) }, Nsp.PING_INTERVAL_MS, Nsp.PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
 
                 // Same device reconnecting after a drop: continue the session that is still on screen.
                 val resumed = PlayerHub.resumeSession(key, requestKeyFrame) { hangUp() }
@@ -244,6 +247,7 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 handshakeDone()
                 pinger?.cancel(false)
                 close()
+                player?.setKeyFrameRequester(null) // before the executor goes away
                 control?.shutdownNow()
                 ntp?.stop()
                 val p = player
@@ -287,6 +291,42 @@ class NspServer(private val context: Context, private val caps: Caps) {
             }
         }
 
+        private fun scheduleDeadline(address: String, ms: Long): ScheduledFuture<*>? = runCatching {
+            scheduler.schedule({
+                if (!established) {
+                    Log.w(TAG, "handshake from $address timed out")
+                    close()
+                }
+            }, ms, TimeUnit.MILLISECONDS)
+        }.getOrNull()
+
+        /**
+         * Peeks at the first bytes: a version 1 sender starts with the "NS" frame magic in plain
+         * text. Only then is "update the sender app" shown, not for every port scan or TLS error.
+         */
+        private fun startTls(address: String): SSLSocket? {
+            if (!peekSupported) return NspTls.server(tls, plain)
+            val first = ByteArray(2)
+            DataInputStream(plain.getInputStream()).readFully(first)
+            if (first[0] == 0x4E.toByte() && first[1] == 0x53.toByte()) {
+                Log.w(TAG, "version 1 sender at $address")
+                val now = System.currentTimeMillis()
+                if (now - lastOldSenderNoticeMs > OLD_SENDER_NOTICE_INTERVAL_MS) {
+                    lastOldSenderNoticeMs = now
+                    PlayerHub.showNotice(context.getString(R.string.notice_old_sender))
+                }
+                return null
+            }
+            return try {
+                NspTls.server(tls, plain, consumed = first)
+            } catch (e: UnsupportedOperationException) {
+                // This TLS provider cannot take already-read bytes: stop peeking (this one connection is lost).
+                Log.w(TAG, "TLS provider cannot resume after peeking; old-sender detection disabled")
+                peekSupported = false
+                null
+            }
+        }
+
         fun close() {
             runCatching { socket.close() }
             runCatching { plain.close() }
@@ -304,6 +344,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
             override val pinPairing: Boolean get() = security.nspPinPairing
             override fun isTrusted(fingerprintHex: String) = trusted.isTrusted(fingerprintHex)
             override fun trust(fingerprintHex: String, deviceName: String) = trusted.trust(fingerprintHex, deviceName)
+            override fun beginPairing() = pairing.compareAndSet(false, true)
+            override fun endPairing() = pairing.set(false)
             override fun showPin(pin: String, deviceName: String) = PlayerHub.showPin(pin, deviceName)
             override fun hidePin() = PlayerHub.hidePin()
             override fun needsApproval() = PlayerHub.needsApproval(context, key)
@@ -344,7 +386,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
 
     companion object {
         private const val TAG = "NShare.Nsp"
-        private const val MAX_PENDING_HANDSHAKES = 4
+        private const val MAX_PENDING_HANDSHAKES = 8
+        private const val OLD_SENDER_NOTICE_INTERVAL_MS = 60_000L
         private val START = byteArrayOf(0, 0, 0, 1)
     }
 }

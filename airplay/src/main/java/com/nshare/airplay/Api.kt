@@ -92,6 +92,8 @@ class ClientInfo(
     val name: String?,
     val model: String?,
     val deviceId: String?,
+    /** Hex Ed25519 key the sender proved in pair-verify, null if it did not pair-verify. */
+    val verifiedKey: String? = null,
 )
 
 /** Media endpoints for one connected sender. Created by [ReceiverListener.onSessionStart]. */

@@ -11,7 +11,8 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
 
 /**
- * TLS 1.3 with mutual authentication between NShare devices.
+ * TLS 1.3 (TLS 1.2 with ECDHE + AEAD on Android 8/9, which lack 1.3) with mutual authentication
+ * between NShare devices.
  *
  * Devices use self-signed certificates, so there is no CA to validate against. Instead the peer
  * certificate must be a valid self-signed certificate, and its SHA-256 fingerprint is pinned by the
@@ -20,24 +21,61 @@ import javax.net.ssl.X509TrustManager
  * trust-on-first-use and approval once the peer's identity is known.
  */
 object NspTls {
-    const val PROTOCOL = "TLSv1.3"
+    private val PROTOCOLS = listOf("TLSv1.3", "TLSv1.2")
+
+    /** TLS 1.2 only with forward secrecy and authenticated encryption (device keys are EC P-256). */
+    private val TLS12_SUITES = setOf(
+        "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+        "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+        "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+    )
 
     fun context(keyManagers: Array<KeyManager>, trust: PinningTrustManager): SSLContext =
-        SSLContext.getInstance(PROTOCOL).apply { init(keyManagers, arrayOf(trust), SecureRandom()) }
+        SSLContext.getInstance("TLS").apply { init(keyManagers, arrayOf(trust), SecureRandom()) }
 
-    /** Wraps an accepted TCP socket as the TLS server; the client must present a certificate. */
-    fun server(ctx: SSLContext, plain: Socket): SSLSocket =
-        (ctx.socketFactory.createSocket(plain, plain.inetAddress.hostAddress, plain.port, true) as SSLSocket).apply {
+    private fun SSLSocket.restrict() {
+        enabledProtocols = supportedProtocols.filter { it in PROTOCOLS }.toTypedArray()
+        enabledCipherSuites = supportedCipherSuites.filter {
+            it.startsWith("TLS_AES_") || it.startsWith("TLS_CHACHA20_") || it in TLS12_SUITES // TLS 1.3 suites are all AEAD
+        }.toTypedArray()
+    }
+
+    /**
+     * Wraps an accepted TCP socket as the TLS server; the client must present a certificate.
+     * [consumed] are bytes already read from [plain] (to tell a v1 sender from a TLS client).
+     */
+    fun server(ctx: SSLContext, plain: Socket, consumed: ByteArray? = null): SSLSocket =
+        (
+            if (consumed != null) {
+                createSocketWithConsumed(ctx.socketFactory, plain, consumed)
+            } else {
+                ctx.socketFactory.createSocket(plain, plain.inetAddress.hostAddress, plain.port, true)
+            } as SSLSocket
+        ).apply {
             useClientMode = false
             needClientAuth = true
-            enabledProtocols = arrayOf(PROTOCOL)
+            restrict()
+        }
+
+    /**
+     * SSLSocketFactory.createSocket(Socket, InputStream, boolean) (Java 8 / Android 7). Called
+     * reflectively because the Kotlin compiler does not resolve that overload here. Throws
+     * [UnsupportedOperationException] if the TLS provider does not implement it.
+     */
+    private fun createSocketWithConsumed(f: javax.net.ssl.SSLSocketFactory, plain: Socket, consumed: ByteArray): Socket =
+        try {
+            javax.net.ssl.SSLSocketFactory::class.java
+                .getMethod("createSocket", Socket::class.java, java.io.InputStream::class.java, Boolean::class.javaPrimitiveType)
+                .invoke(f, plain, java.io.ByteArrayInputStream(consumed), true) as Socket
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.targetException
         }
 
     /** Wraps a connected TCP socket as the TLS client. */
     fun client(ctx: SSLContext, plain: Socket): SSLSocket =
         (ctx.socketFactory.createSocket(plain, plain.inetAddress.hostAddress, plain.port, true) as SSLSocket).apply {
             useClientMode = true
-            enabledProtocols = arrayOf(PROTOCOL)
+            restrict()
         }
 
     fun fingerprint(cert: X509Certificate): ByteArray = MessageDigest.getInstance("SHA-256").digest(cert.encoded)

@@ -97,13 +97,20 @@ class ReceiverService : Service() {
         nspServer = NspServer(this, caps).also {
             try {
                 it.start()
+                PlayerHub.nshareUnavailable = false
             } catch (e: Exception) {
                 Log.e(TAG, "failed to start NShare receiver", e)
+                PlayerHub.nshareUnavailable = true
             }
         }
     }
 
-    private fun airPlayKey(client: ClientInfo) = "airplay:" + (client.deviceId ?: client.address)
+    /**
+     * Identity for "same device?" decisions (takeover approval). Only the key proven in pair-verify
+     * counts; the self-reported deviceID could be copied by another device on the network.
+     */
+    private fun airPlayKey(client: ClientInfo) =
+        client.verifiedKey?.let { "airplay:$it" } ?: "airplay-unverified:${System.nanoTime()}"
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 

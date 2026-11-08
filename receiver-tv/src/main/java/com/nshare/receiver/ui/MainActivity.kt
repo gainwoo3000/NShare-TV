@@ -227,6 +227,7 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
                 getString(R.string.stats_frames, s.videoLate.get().toInt(), s.videoSkipped.get().toInt(), s.videoDecoderResets.get().toInt()),
             )
             appendLine(getString(R.string.stats_audio, s.audioSyncErrorMs, t.audioOutputLatencyNs / 1e6, s.audioPerfMode))
+            if (s.audioPlayingLate) appendLine(getString(R.string.stats_audio_late))
             appendLine(
                 getString(
                     R.string.stats_audio2,
