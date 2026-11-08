@@ -26,6 +26,7 @@ class AirPlayServer(
     private val sessions = CopyOnWriteArrayList<RtspSession>()
     @Volatile private var active: RtspSession? = null
     @Volatile private var running = false
+    private var watchdog: java.util.concurrent.ScheduledExecutorService? = null
 
     var port: Int = 0
         private set
@@ -41,17 +42,39 @@ class AirPlayServer(
             start()
         }
         mdns.register(config, identity, port)
+        watchdog = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "nshare-rtsp-watchdog").apply { isDaemon = true }
+        }.also { it.scheduleWithFixedDelay(::checkIdleSessions, 2, 2, java.util.concurrent.TimeUnit.SECONDS) }
         Log.i(TAG, "AirPlay receiver '${config.name}' listening on $port")
     }
 
     fun stop() {
         running = false
+        watchdog?.shutdownNow()
+        watchdog = null
         mdns.unregister()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         sessions.forEach { it.close() }
         sessions.clear()
         active = null
+    }
+
+    /**
+     * iOS / macOS send POST /feedback about every 2 s while a session is up, even when the video
+     * stream is paused (locked screen). Nothing at all for 8 s means the sender is gone (e.g. left
+     * Wi-Fi without a TEARDOWN): release the session instead of freezing on the last frame.
+     */
+    private fun checkIdleSessions() {
+        val now = System.nanoTime()
+        for (s in sessions) {
+            if (!s.isStreaming) continue
+            val idleMs = (now - s.lastActivityNs()) / 1_000_000
+            if (idleMs > SESSION_IDLE_TIMEOUT_MS) {
+                Log.w(TAG, "sender ${s.remoteAddress} silent for $idleMs ms, closing session")
+                s.close()
+            }
+        }
     }
 
     /** Drops the current sender, if any. */
@@ -115,5 +138,6 @@ class AirPlayServer(
 
     companion object {
         private const val TAG = "NShare.Server"
+        private const val SESSION_IDLE_TIMEOUT_MS = 8_000L
     }
 }

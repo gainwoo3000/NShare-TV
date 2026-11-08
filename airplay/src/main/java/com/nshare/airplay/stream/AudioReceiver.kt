@@ -53,6 +53,8 @@ class AudioReceiver(
         private set
     @Volatile var packetsLost = 0L
         private set
+    @Volatile var lastDataNs = 0L
+        private set
 
     fun start() {
         running = true
@@ -140,6 +142,7 @@ class AudioReceiver(
             recent[recentPos] = seq
             recentPos = (recentPos + 1) and (recent.size - 1)
             packetsReceived++
+            lastDataNs = System.nanoTime()
             if (nextSeq >= 0 && seqDiff(seq, nextSeq) < 0) return // too late, already skipped
             pending[seq] = packet
             if (nextSeq < 0) nextSeq = seq

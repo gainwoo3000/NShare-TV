@@ -59,6 +59,8 @@ class MirrorReceiver(
         private set
     @Volatile var framesReceived = 0L
         private set
+    @Volatile var lastDataNs = 0L
+        private set
 
     init {
         val id = java.lang.Long.toUnsignedString(streamConnectionId)
@@ -102,6 +104,7 @@ class MirrorReceiver(
                 val payload = ByteArray(size)
                 readFully(input, payload, size)
                 bytesReceived += 128 + size
+                lastDataNs = System.nanoTime()
                 handle(header, payload)
             }
         } catch (e: Exception) {

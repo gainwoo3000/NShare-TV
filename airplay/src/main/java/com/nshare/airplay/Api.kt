@@ -105,4 +105,6 @@ interface ReceiverListener {
     /** [disconnect] drops this sender; called when another sender takes over the screen. */
     fun onSessionStart(client: ClientInfo, clock: ClockSync, disconnect: () -> Unit): SessionSinks
     fun onSessionEnd() {}
+    /** Whether [client] may take the screen (e.g. the TV user approves a second sender). May block. */
+    fun approveSession(client: ClientInfo): Boolean = true
 }

@@ -46,6 +46,11 @@ internal class RtspSession(
 
     @Volatile private var generation = 0
     @Volatile var isStreaming = false
+
+    /** Last time anything arrived from the sender (requests incl. /feedback, video or audio data). */
+    fun lastActivityNs(): Long = maxOf(lastRequestNs, mirror?.lastDataNs ?: 0L, audio?.lastDataNs ?: 0L)
+
+    @Volatile private var lastRequestNs = System.nanoTime()
         private set
 
     fun run() {
@@ -54,6 +59,7 @@ internal class RtspSession(
         try {
             while (!socket.isClosed) {
                 val req = reader.read() ?: break
+                lastRequestNs = System.nanoTime()
                 val res = RtspResponse(req.protocol)
                 try {
                     handle(req, res)
@@ -295,6 +301,12 @@ internal class RtspSession(
         )
         client = info
         Log.i(TAG, "session from ${info.name} (${info.model}) at $remoteAddress, timing=${body.string("timingProtocol")}")
+        if (!server.listener.approveSession(info)) {
+            Log.i(TAG, "session from ${info.name} declined on the receiver")
+            res.status(403, "Forbidden")
+            res.disconnect = true
+            return false
+        }
 
         val clock = ClockSync()
         this.clock = clock
