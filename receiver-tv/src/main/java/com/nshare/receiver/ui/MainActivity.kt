@@ -37,7 +37,8 @@ class MainActivity : ComponentActivity(), PlayerHub.Listener {
 
     private val statsTicker = object : Runnable {
         override fun run() {
-            statsText = buildStats()
+            // The panel is hidden under the settings page; don't recompose the screen for it.
+            if (!settingsOpen) statsText = buildStats()
             handler.postDelayed(this, 500)
         }
     }

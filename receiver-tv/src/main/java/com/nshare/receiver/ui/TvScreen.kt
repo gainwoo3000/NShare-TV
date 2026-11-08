@@ -116,7 +116,9 @@ fun TvScreen(state: TvUiState, adUnitId: String, surfaceCallback: SurfaceHolder.
             if (state.reconnecting) ReconnectingBanner()
         }
 
-        AnimatedVisibility(visible = !state.mirroring, enter = fadeIn(), exit = fadeOut()) {
+        // Not composed under the settings screen: the idle layout and its ad view would keep drawing
+        // behind an opaque page and slow down scrolling.
+        AnimatedVisibility(visible = !state.mirroring && !state.settingsOpen, enter = fadeIn(), exit = fadeOut()) {
             IdleScreen(state, adUnitId, actions)
         }
 
