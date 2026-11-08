@@ -132,8 +132,9 @@ object PlayerHub {
         }
         lastMediaCommand = MediaCommand(command, android.os.SystemClock.elapsedRealtime())
         if (command == "playpause") {
-            // Show the new state right away; the sender confirms with a flush (pause) or progress (play).
+            // Show the new state right away; the audio flow takes over again once the sender reacted.
             val now = android.os.SystemClock.elapsedRealtime()
+            musicStateOverrideUntilMs = now + 1_500
             nowPlaying = nowPlaying?.let { it.copy(elapsedMs = it.positionMs(now), atMs = now, paused = !it.paused) }
         }
     }
@@ -166,7 +167,35 @@ object PlayerHub {
     }
 
     private fun updateNowPlaying(player: MirrorPlayer, change: (NowPlaying) -> NowPlaying) = post {
-        if (player === this.player) nowPlaying = change(nowPlaying ?: NowPlaying())
+        if (player !== this.player) return@post
+        nowPlaying = change(nowPlaying ?: NowPlaying(atMs = android.os.SystemClock.elapsedRealtime()))
+        main.removeCallbacks(musicFlowCheck)
+        main.postDelayed(musicFlowCheck, 250)
+    }
+
+    /** Until then the state set by a remote command wins over what the audio flow suggests. */
+    private var musicStateOverrideUntilMs = 0L
+
+    /**
+     * Playing or paused, judged by the audio itself: senders keep sending metadata and progress
+     * while paused, and flush both when pausing and when resuming, so neither tells the state.
+     * Audio packets stop when paused and flow while playing.
+     */
+    private val musicFlowCheck: Runnable = object : Runnable {
+        override fun run() {
+            val np = nowPlaying ?: return
+            val p = player ?: return
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now >= musicStateOverrideUntilMs) {
+                val flowing = now - p.lastAudioPacketMs < 700
+                if (flowing && np.paused) {
+                    nowPlaying = np.copy(atMs = now, paused = false)
+                } else if (!flowing && !np.paused) {
+                    nowPlaying = np.copy(elapsedMs = np.positionMs(p.lastAudioPacketMs), atMs = now, paused = true)
+                }
+            }
+            main.postDelayed(this, 250)
+        }
     }
 
     /** The NShare (Android sender) receiver could not start; shown on the idle screen. */
@@ -385,12 +414,8 @@ object PlayerHub {
         }
 
         override fun onProgress(player: MirrorPlayer, elapsedMs: Long, durationMs: Long) = updateNowPlaying(player) {
-            it.copy(elapsedMs = elapsedMs, durationMs = durationMs, atMs = android.os.SystemClock.elapsedRealtime(), paused = false)
-        }
-
-        override fun onAudioPaused(player: MirrorPlayer) = updateNowPlaying(player) {
-            val now = android.os.SystemClock.elapsedRealtime()
-            it.copy(elapsedMs = it.positionMs(now), atMs = now, paused = true)
+            // Senders also report progress while paused; play / pause comes from the audio flow.
+            it.copy(elapsedMs = elapsedMs, durationMs = durationMs, atMs = android.os.SystemClock.elapsedRealtime())
         }
 
         override fun onEnded(player: MirrorPlayer) = post {

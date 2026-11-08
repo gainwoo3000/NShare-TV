@@ -28,7 +28,6 @@ class MirrorPlayer(
         fun onTrackInfo(player: MirrorPlayer, info: TrackInfo) {}
         fun onArtwork(player: MirrorPlayer, image: ByteArray?) {}
         fun onProgress(player: MirrorPlayer, elapsedMs: Long, durationMs: Long) {}
-        fun onAudioPaused(player: MirrorPlayer) {}
     }
 
     val timeline = Timeline(clock, mode, avOffsetMs)
@@ -86,6 +85,10 @@ class MirrorPlayer(
         }
     }
 
+    /** When the last audio packet arrived (elapsedRealtime); music is paused when packets stop. */
+    @Volatile var lastAudioPacketMs = 0L
+        private set
+
     override val audio: AudioSink = object : AudioSink {
         override fun onAudioStart(format: AudioFormat) {
             // NShare senders have no volume channel, so level their (often quiet) capture automatically.
@@ -94,14 +97,12 @@ class MirrorPlayer(
         }
 
         override fun onAudioPacket(packet: AudioPacket) {
+            lastAudioPacketMs = android.os.SystemClock.elapsedRealtime()
             timeline.onAudioArrival(packet.remoteNs, packet.arrivalNs)
             audioRenderer.submit(packet)
         }
 
-        override fun onAudioFlush() {
-            audioRenderer.flush()
-            events.onAudioPaused(this@MirrorPlayer) // music senders flush on pause and seek
-        }
+        override fun onAudioFlush() = audioRenderer.flush()
         override fun onAudioStop() = audioRenderer.stop()
         override fun onVolume(db: Float) = audioRenderer.setVolume(db)
         override fun onTrackInfo(info: TrackInfo) = events.onTrackInfo(this@MirrorPlayer, info)
