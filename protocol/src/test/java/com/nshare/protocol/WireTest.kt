@@ -34,6 +34,19 @@ class WireTest {
     }
 
     @Test
+    fun oversizedHandshakeFrameIsRejectedBeforeAllocation() {
+        val buf = ByteArrayOutputStream()
+        FrameWriter(DataOutputStream(buf)).write(Nsp.Type.HELLO, payload = ByteArray(Nsp.MAX_HANDSHAKE_PAYLOAD + 1))
+        val r = FrameReader(DataInputStream(ByteArrayInputStream(buf.toByteArray())))
+        try {
+            r.read(Nsp.MAX_HANDSHAKE_PAYLOAD)
+            throw AssertionError("expected IOException")
+        } catch (e: java.io.IOException) {
+            assertTrue(e.message!!.contains("limit"))
+        }
+    }
+
+    @Test
     fun handshakeMessages() {
         val hello = Hello.decode(Hello("Galaxy S25", "SM-S931N", 50123).encode())
         assertEquals("Galaxy S25", hello.deviceName)

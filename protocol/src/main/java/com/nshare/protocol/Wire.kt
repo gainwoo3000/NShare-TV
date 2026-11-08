@@ -29,6 +29,8 @@ object Nsp {
     const val MAGIC = 0x4E53
     const val HEADER_SIZE = 16
     const val MAX_PAYLOAD = 32 * 1024 * 1024
+    /** Payload limit before the handshake completes (HELLO/CAPS are a few hundred bytes). */
+    const val MAX_HANDSHAKE_PAYLOAD = 16 * 1024
 
     object Type {
         const val HELLO = 1
@@ -59,7 +61,8 @@ class Frame(val type: Int, val flags: Int, val timeNs: Long, val payload: ByteAr
 }
 
 class FrameReader(private val input: DataInputStream) {
-    fun read(): Frame {
+    /** Reads one frame; payloads larger than [maxPayload] are rejected before anything is allocated. */
+    fun read(maxPayload: Int = Nsp.MAX_PAYLOAD): Frame {
         val magic = try {
             input.readUnsignedShort()
         } catch (e: EOFException) {
@@ -69,7 +72,7 @@ class FrameReader(private val input: DataInputStream) {
         val type = input.readUnsignedByte()
         val flags = input.readUnsignedByte()
         val length = input.readInt()
-        if (length < 0 || length > Nsp.MAX_PAYLOAD) throw IOException("bad length $length")
+        if (length < 0 || length > maxPayload) throw IOException("bad length $length (limit $maxPayload)")
         val time = input.readLong()
         val payload = ByteArray(length)
         input.readFully(payload)

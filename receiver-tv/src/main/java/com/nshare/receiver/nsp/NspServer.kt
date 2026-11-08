@@ -32,12 +32,17 @@ import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Receives NShare protocol streams from NShare sender apps (Android, later Windows). */
 class NspServer(private val context: Context, private val caps: Caps) {
     private var server: ServerSocket? = null
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private var registration: NsdManager.RegistrationListener? = null
+    private val pendingHandshakes = AtomicInteger()
+    private val watchdog = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "nsp-watchdog").apply { isDaemon = true } }
     @Volatile private var running = false
 
     fun start() {
@@ -101,6 +106,13 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 if (running) Log.e(TAG, "accept failed", e)
                 break
             }
+            // Unauthenticated peers get a bounded share of the receiver: at most 4 handshakes at once.
+            if (pendingHandshakes.get() >= MAX_PENDING_HANDSHAKES) {
+                Log.w(TAG, "too many pending handshakes, refusing ${s.inetAddress.hostAddress}")
+                runCatching { s.close() }
+                continue
+            }
+            pendingHandshakes.incrementAndGet()
             Thread({ Session(s).run() }, "nsp-${s.inetAddress.hostAddress}").apply {
                 isDaemon = true
                 start()
@@ -115,19 +127,39 @@ class NspServer(private val context: Context, private val caps: Caps) {
         private var codec = VideoCodec.H264
         private var parameterSets = ByteArray(0)
 
+        private var handshakePending = true
+
+        private fun handshakeDone() {
+            if (handshakePending) {
+                handshakePending = false
+                pendingHandshakes.decrementAndGet()
+            }
+        }
+
         fun run() {
             val address = socket.inetAddress.hostAddress ?: "?"
+            // The whole handshake must finish within 10 s, however slowly the peer trickles bytes.
+            val deadline = watchdog.schedule({
+                if (handshakePending) {
+                    Log.w(TAG, "handshake from $address timed out")
+                    close()
+                }
+            }, HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             try {
                 socket.tcpNoDelay = true
                 socket.keepAlive = true
+                socket.soTimeout = HANDSHAKE_TIMEOUT_MS.toInt()
                 val reader = FrameReader(DataInputStream(BufferedInputStream(socket.getInputStream(), 512 * 1024)))
                 val writer = FrameWriter(DataOutputStream(BufferedOutputStream(socket.getOutputStream())))
 
-                val first = reader.read()
+                val first = reader.read(Nsp.MAX_HANDSHAKE_PAYLOAD)
                 if (first.type != Nsp.Type.HELLO) throw IllegalStateException("expected HELLO, got ${first.type}")
                 val hello = Hello.decode(first.payload)
                 Log.i(TAG, "sender ${hello.deviceName} (${hello.model}) at $address, protocol v${hello.protocolVersion}")
                 writer.write(Nsp.Type.CAPS, payload = caps.encode())
+                handshakeDone()
+                deadline.cancel(false)
+                socket.soTimeout = 0
 
                 val clock = ClockSync()
                 ntp = NtpClient(socket.inetAddress, hello.timingPort, clock).also { it.start() }
@@ -171,6 +203,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
             } catch (e: Exception) {
                 Log.i(TAG, "session $address ended: ${e.javaClass.simpleName} ${e.message}")
             } finally {
+                deadline.cancel(false)
+                handshakeDone()
                 close()
                 controlExecutor?.shutdownNow()
                 ntp?.stop()
@@ -216,6 +250,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
 
     companion object {
         private const val TAG = "NShare.Nsp"
+        private const val MAX_PENDING_HANDSHAKES = 4
+        private const val HANDSHAKE_TIMEOUT_MS = 10_000L
         private val START = byteArrayOf(0, 0, 0, 1)
     }
 }
