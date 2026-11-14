@@ -162,6 +162,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
         @Volatile private var goodbye = false
         @Volatile private var established = false
         @Volatile private var writer: FrameWriter? = null
+        /** Released once the connection is gone (the sender closed it, or it failed). */
+        private val ended = java.util.concurrent.CountDownLatch(1)
 
         private fun handshakeDone() {
             if (handshakePending) {
@@ -249,6 +251,7 @@ class NspServer(private val context: Context, private val caps: Caps) {
                 handshakeDone()
                 pinger?.cancel(false)
                 close()
+                ended.countDown()
                 player?.setKeyFrameRequester(null) // before the executor goes away
                 control?.shutdownNow()
                 ntp?.stop()
@@ -264,6 +267,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
         private fun stream(reader: FrameReader, s: SessionSinks, clock: ClockSync) {
             while (!socket.isClosed) {
                 val f = reader.read()
+                // Hung up: drain until the sender closes, without showing or playing anything more.
+                if (goodbye) continue
                 val arrival = System.nanoTime()
                 when (f.type) {
                     Nsp.Type.VIDEO_CONFIG -> {
@@ -319,11 +324,25 @@ class NspServer(private val context: Context, private val caps: Caps) {
             runCatching { plain.close() }
         }
 
-        /** Ends the session on purpose (TV user, or another sender took over): the sender must not reconnect. */
+        /**
+         * Ends the session on purpose (TV user, or another sender took over): the sender must not reconnect.
+         *
+         * Runs off the caller's thread: the TV user's request comes from the UI thread, where socket
+         * writes throw, so the BYE was lost and the phone took the hang-up for a network drop and
+         * reconnected. After the BYE the sender closes its end; closing ours right away, with video
+         * still arriving, could reset the connection before the sender has read it.
+         */
         fun hangUp() {
+            if (goodbye) return
             goodbye = true
-            runCatching { writer?.write(Nsp.Type.BYE) }
-            close()
+            Thread({
+                runCatching { writer?.write(Nsp.Type.BYE) }
+                runCatching { ended.await(HANGUP_LINGER_MS, TimeUnit.MILLISECONDS) }
+                close()
+            }, "nsp-hangup").apply {
+                isDaemon = true
+                start()
+            }
         }
 
         /** Trust decisions for this connection, backed by the TV settings. */
@@ -375,6 +394,8 @@ class NspServer(private val context: Context, private val caps: Caps) {
         private const val TAG = "NShare.Nsp"
         private const val MAX_PENDING_HANDSHAKES = 8
         private const val OLD_SENDER_NOTICE_INTERVAL_MS = 60_000L
+        /** How long a hang-up waits for the sender to close after the BYE before closing itself. */
+        private const val HANGUP_LINGER_MS = 1_500L
         /** Conscrypt / BoringSSL wording for "the peer did not send a TLS record". */
         private val NOT_TLS_MESSAGES = listOf("Unable to parse TLS packet header", "WRONG_VERSION_NUMBER")
         private val START = byteArrayOf(0, 0, 0, 1)
